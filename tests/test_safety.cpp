@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
 #include "SafetyChecker.hpp"
+#include "BasicLightController.hpp"
 
 using namespace crossroads;
 
@@ -169,4 +170,123 @@ TEST_CASE("Turning lights enforce cross-traffic constraints", "turning_lights")
     attemptTurnGreen = prev;
     attemptTurnGreen.turnEastNorth = LightState::Green;
     REQUIRE(c.isValidTransition(prev, attemptTurnGreen, 0.1) == true);
+}
+
+TEST_CASE("BasicLightController initializes NS green", "controller")
+{
+    BasicLightController ctrl(5.0, 5.0);
+    IntersectionState state = ctrl.getCurrentState();
+
+    REQUIRE(state.north == LightState::Green);
+    REQUIRE(state.south == LightState::Green);
+    REQUIRE(state.east == LightState::Red);
+    REQUIRE(state.west == LightState::Red);
+}
+
+TEST_CASE("BasicLightController cycles through phases", "controller")
+{
+    BasicLightController ctrl(1.0, 1.0); // 1 second green phases
+    SafetyChecker checker;
+
+    // Initial state: NS green
+    auto state = ctrl.getCurrentState();
+    REQUIRE(state.north == LightState::Green);
+    REQUIRE(state.south == LightState::Green);
+
+    // After 1+ second: should transition to NS orange
+    ctrl.tick(1.1);
+    state = ctrl.getCurrentState();
+    REQUIRE(state.north == LightState::Orange);
+    REQUIRE(state.south == LightState::Orange);
+    REQUIRE(state.east == LightState::Red);
+    REQUIRE(state.west == LightState::Red);
+
+    // After 2 more seconds: should be EW green (orange took 2 seconds)
+    ctrl.tick(2.1);
+    state = ctrl.getCurrentState();
+    REQUIRE(state.north == LightState::Red);
+    REQUIRE(state.south == LightState::Red);
+    REQUIRE(state.east == LightState::Green);
+    REQUIRE(state.west == LightState::Green);
+
+    // After 1 more second: should be EW orange
+    ctrl.tick(1.1);
+    state = ctrl.getCurrentState();
+    REQUIRE(state.east == LightState::Orange);
+    REQUIRE(state.west == LightState::Orange);
+
+    // All transitions should be safe
+    REQUIRE(checker.isSafe(state) == true);
+}
+
+TEST_CASE("BasicLightController reset works", "controller")
+{
+    BasicLightController ctrl(3.0, 3.0);
+
+    // Advance time
+    ctrl.tick(5.1);
+    auto state = ctrl.getCurrentState();
+
+    // Reset and verify initial state
+    ctrl.reset();
+    state = ctrl.getCurrentState();
+
+    // Should be back to NS green
+    REQUIRE(state.north == LightState::Green);
+    REQUIRE(state.south == LightState::Green);
+    REQUIRE(state.east == LightState::Red);
+    REQUIRE(state.west == LightState::Red);
+}
+
+TEST_CASE("All four turning lights work correctly", "turning_lights_all")
+{
+    SafetyChecker c;
+
+    // Test 1: Zuid->Oost (South->East) - allowed when West is Red
+    IntersectionState state1;
+    state1.north = LightState::Red;
+    state1.south = LightState::Red;
+    state1.east = LightState::Red;
+    state1.west = LightState::Red;
+    state1.turnSouthEast = LightState::Green;
+    state1.turnNorthWest = LightState::Red;
+    state1.turnWestSouth = LightState::Red;
+    state1.turnEastNorth = LightState::Red;
+    REQUIRE(c.isSafe(state1) == true);
+
+    // Test 2: Oost->Noord (East->North) - allowed when South is Red
+    IntersectionState state2;
+    state2.north = LightState::Red;
+    state2.south = LightState::Red;
+    state2.east = LightState::Red;
+    state2.west = LightState::Red;
+    state2.turnSouthEast = LightState::Red;
+    state2.turnNorthWest = LightState::Red;
+    state2.turnWestSouth = LightState::Red;
+    state2.turnEastNorth = LightState::Green;
+    REQUIRE(c.isSafe(state2) == true);
+
+    // Test 3: Noord->West (North->West) - allowed when East is Red
+    IntersectionState state3;
+    state3.north = LightState::Red;
+    state3.south = LightState::Red;
+    state3.east = LightState::Red;
+    state3.west = LightState::Red;
+    state3.turnSouthEast = LightState::Red;
+    state3.turnNorthWest = LightState::Green;
+    state3.turnWestSouth = LightState::Red;
+    state3.turnEastNorth = LightState::Red;
+    REQUIRE(c.isSafe(state3) == true);
+
+    // Test 4: West->Zuid (West->South) - allowed when North is Red
+    IntersectionState state4;
+    state4.north = LightState::Red;
+    state4.south = LightState::Red;
+    state4.east = LightState::Red;
+    state4.west = LightState::Red;
+    state4.turnSouthEast = LightState::Red;
+    state4.turnNorthWest = LightState::Red;
+    state4.turnWestSouth = LightState::Green;
+    state4.turnEastNorth = LightState::Red;
+    REQUIRE(c.isSafe(state4) == true);
 }
