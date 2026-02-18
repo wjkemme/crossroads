@@ -6,7 +6,7 @@ namespace crossroads
     enum class LightState
     {
         Red,
-        Yellow,
+        Orange,
         Green
     };
 

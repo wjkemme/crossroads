@@ -32,10 +32,19 @@ crossroads/
 - Dependencies required: g++, gdb
 - **Constraints**: To ensure crossroad layouts are reusable and accessible, each configuration must be saved in a database. This approach not only provides flexibility for experimentation and deployment but also establishes a structured way to manage multiple intersection designs within the application.
 - **Safety**: Before we start working on smarter control algorithms, we need to ensure that the crossroads are always in a safe state. Therefore, in between the control algorithm and the interface to the traffic lights, a safety checker will be added. The safety checker warrants the consistency of commands to the traffic lights. The safety checker implements a series of rules and rigorously checks that none of the rules are violated at any time.
+- **Safety**: Before we start working on smarter control algorithms, we need to ensure that the crossroads are always in a safe state. Therefore, in between the control algorithm and the interface to the traffic lights, a safety checker will be added. The safety checker warrants the consistency of commands to the traffic lights. The safety checker implements a series of rules and rigorously checks that none of the rules are violated at any time.
 - This approach ensures that conflicting signals—such as multiple directions showing green at the same time—are systematically prevented. The safety checker acts as a safeguard layer, monitoring all light changes and enforcing critical safety constraints regardless of the logic produced by the control algorithm. By introducing this component, the integrity and reliability of the intersection control system are significantly strengthened, reducing the risk of accidents caused by software errors or unforeseen circumstances.
 - ORM: sqlite_orm
 - QT message queing tussen server en client UI communicatie als dat mogelijk is en anders WebSocket/REST
 - CMake
+
+## Traffic light states and transitions
+- Add `Orange` (amber) light state in addition to `Red` and `Green`.
+- Allowed transitions per light: `Green -> Orange -> Red`, and `Red -> Green` only.
+- The `Orange` state is always held for a fixed time period: **2 seconds**.
+- **Crossing-light safety rule**: A light cannot transition to `Green` if the opposite (crossing) light is still `Green` or `Orange`.
+  - North/South are opposites; East/West are opposites.
+- The `SafetyChecker` will validate both safety invariants (no conflicting greens), transition validity (per-light transition rules and orange duration), and crossing-light constraints.
 
 
 ## Iteration: Different Control Algorithms
