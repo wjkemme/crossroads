@@ -2,23 +2,25 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build and Run",
+            "label": "CMake: configure",
             "type": "shell",
-            "command": "g++",
-            "args": [
-                "main.cpp",
-                "-o",
-                "build/crossroads",
-                "&&",
-                "./build/crossroads"
-            ],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "problemMatcher": [
-                "$gcc"
-            ]
+            "command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "CMake: build",
+            "type": "shell",
+            "command": "cmake --build build --config Debug",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "CMake: run",
+            "type": "shell",
+            "command": "./build/crossroads",
+            "group": "none",
+            "problemMatcher": []
         }
     ]
 }
