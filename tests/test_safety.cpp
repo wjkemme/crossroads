@@ -60,37 +60,113 @@ TEST_CASE("Transitions enforce G->O->R and R->G with orange timing", "transition
     green.north = LightState::Green;
     REQUIRE(c.isValidTransition(red, green, 0.1) == true);
 }
-TEST_CASE("Cannot go green if opposite crossing light is green or orange", "crossing")
+TEST_CASE("Cannot go green if other route is green or orange", "crossing")
 {
     SafetyChecker c;
 
-    // Test north cannot go green if south is still green
+    // Test North-South route: north cannot go green if east OR west is still active
     IntersectionState prev;
     prev.north = LightState::Red;
-    prev.south = LightState::Green;
-    prev.east = LightState::Red;
+    prev.south = LightState::Red;
+    prev.east = LightState::Green; // EW route is active
     prev.west = LightState::Red;
 
     IntersectionState attemptGreen = prev;
     attemptGreen.north = LightState::Green;
     REQUIRE(c.isValidTransition(prev, attemptGreen, 0.1) == false);
 
-    // Test east cannot go green if west is orange
-    prev.north = LightState::Red;
+    // Test North-South route: north cannot go green if west is orange
+    prev.east = LightState::Red;
+    prev.west = LightState::Orange; // EW route is active
+
+    attemptGreen = prev;
+    attemptGreen.north = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptGreen, 0.1) == false);
+
+    // Test North-South route: north CAN go green if both east and west are red
+    prev.east = LightState::Red;
+    prev.west = LightState::Red;
+
+    attemptGreen = prev;
+    attemptGreen.north = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptGreen, 0.1) == true);
+
+    // Test East-West route: east cannot go green if north OR south is still active
+    prev.north = LightState::Green; // NS route is active
     prev.south = LightState::Red;
     prev.east = LightState::Red;
-    prev.west = LightState::Orange;
+    prev.west = LightState::Red;
 
     attemptGreen = prev;
     attemptGreen.east = LightState::Green;
     REQUIRE(c.isValidTransition(prev, attemptGreen, 0.1) == false);
 
-    // Test north CAN go green if south is red (even if east or west is active)
+    // Test North and South can BOTH be green (same route)
     prev.north = LightState::Red;
     prev.south = LightState::Red;
-    prev.east = LightState::Green; // east is active, but north is opposite to south, not east
+    prev.east = LightState::Red;
     prev.west = LightState::Red;
-    attemptGreen = prev;
-    attemptGreen.north = LightState::Green;
-    REQUIRE(c.isValidTransition(prev, attemptGreen, 0.1) == true);
+
+    IntersectionState bothNSGreen = prev;
+    bothNSGreen.north = LightState::Green;
+    bothNSGreen.south = LightState::Green;
+    REQUIRE(c.isSafe(bothNSGreen) == true);
+}
+
+TEST_CASE("Turning lights enforce cross-traffic constraints", "turning_lights")
+{
+    SafetyChecker c;
+
+    // Test turnSouthEast cannot go green if West is active
+    IntersectionState prev;
+    prev.north = LightState::Red;
+    prev.south = LightState::Red;
+    prev.east = LightState::Red;
+    prev.west = LightState::Green; // West is active
+    prev.turnSouthEast = LightState::Red;
+
+    IntersectionState attemptTurnGreen = prev;
+    attemptTurnGreen.turnSouthEast = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptTurnGreen, 0.1) == false);
+
+    // Test turnSouthEast CAN go green if West is red
+    prev.west = LightState::Red;
+    attemptTurnGreen = prev;
+    attemptTurnGreen.turnSouthEast = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptTurnGreen, 0.1) == true);
+
+    // Test turnNorthWest cannot go green if East is orange
+    prev.north = LightState::Red;
+    prev.east = LightState::Orange; // East is active
+    prev.turnNorthWest = LightState::Red;
+
+    attemptTurnGreen = prev;
+    attemptTurnGreen.turnNorthWest = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptTurnGreen, 0.1) == false);
+
+    // Test turnWestSouth cannot go green if North is green
+    prev.north = LightState::Green; // North is active
+    prev.east = LightState::Red;
+    prev.west = LightState::Red;
+    prev.turnWestSouth = LightState::Red;
+
+    attemptTurnGreen = prev;
+    attemptTurnGreen.turnWestSouth = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptTurnGreen, 0.1) == false);
+
+    // Test turnEastNorth cannot go green if South is active
+    prev.north = LightState::Red;
+    prev.south = LightState::Orange; // South is active
+    prev.east = LightState::Red;
+    prev.turnEastNorth = LightState::Red;
+
+    attemptTurnGreen = prev;
+    attemptTurnGreen.turnEastNorth = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptTurnGreen, 0.1) == false);
+
+    // Test turnEastNorth CAN go green if South is red
+    prev.south = LightState::Red;
+    attemptTurnGreen = prev;
+    attemptTurnGreen.turnEastNorth = LightState::Green;
+    REQUIRE(c.isValidTransition(prev, attemptTurnGreen, 0.1) == true);
 }

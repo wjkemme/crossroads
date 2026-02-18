@@ -42,9 +42,19 @@ crossroads/
 - Add `Orange` (amber) light state in addition to `Red` and `Green`.
 - Allowed transitions per light: `Green -> Orange -> Red`, and `Red -> Green` only.
 - The `Orange` state is always held for a fixed time period: **2 seconds**.
-- **Crossing-light safety rule**: A light cannot transition to `Green` if the opposite (crossing) light is still `Green` or `Orange`.
-  - North/South are opposites; East/West are opposites.
-- The `SafetyChecker` will validate both safety invariants (no conflicting greens), transition validity (per-light transition rules and orange duration), and crossing-light constraints.
+- **Crossing-light safety rule**: A light cannot transition to `Green` if the other route is still active (has any light in `Green` or `Orange` state).
+  - North/South are the same route; East/West are the same route.
+  - To switch from NS to EW (or vice versa), all lights of the moving-from route must first reach `Red`.
+- The `SafetyChecker` will validate safety invariants (no simultaneous NS and EW greens), transition validity (per-light rules and orange duration), and crossing-light constraints.
+
+## Turning Lights (Afslagindicatoren)
+- **4 turning lights** for safe turns at the intersection:
+  - `turnSouthEast` (South→East): allowed only when West is Red
+  - `turnNorthWest` (North→West): allowed only when East is Red
+  - `turnWestSouth` (West→South): allowed only when North is Red
+  - `turnEastNorth` (East→North): allowed only when South is Red
+- Each turn light follows the same transition rules: `Red -> Green -> Orange -> Red`
+- Orange duration: 2 seconds (same as main lights)
 
 
 ## Iteration: Different Control Algorithms
