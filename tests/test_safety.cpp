@@ -2,6 +2,7 @@
 #include <catch2/catch_all.hpp>
 #include "SafetyChecker.hpp"
 #include "BasicLightController.hpp"
+#include "TrafficGenerator.hpp"
 
 using namespace crossroads;
 
@@ -289,4 +290,77 @@ TEST_CASE("All four turning lights work correctly", "turning_lights_all")
     state4.turnWestSouth = LightState::Green;
     state4.turnEastNorth = LightState::Red;
     REQUIRE(c.isSafe(state4) == true);
+}
+
+TEST_CASE("TrafficGenerator creates vehicles", "traffic")
+{
+    TrafficGenerator gen(0.5); // 0.5 vehicles per second per lane
+
+    // Generate traffic for 2 seconds
+    gen.generateTraffic(2.0, 0.0);
+
+    // Should have some vehicles in queues now
+    REQUIRE(gen.getTotalWaiting() > 0);
+    REQUIRE(gen.getTotalGenerated() > 0);
+}
+
+TEST_CASE("TrafficGenerator queue management", "traffic")
+{
+    TrafficGenerator gen(2.0); // 2 vehicles per second per lane
+
+    // Generate traffic for 0.6 seconds (enough for 1+ vehicle per lane)
+    gen.generateTraffic(0.6, 0.0);
+    size_t initial_count = gen.getTotalWaiting();
+    REQUIRE(initial_count > 0);
+
+    // Check that we have vehicles in different lanes
+    REQUIRE(gen.getQueueLength(Direction::North) > 0);
+    REQUIRE(gen.getQueueLength(Direction::South) > 0);
+    REQUIRE(gen.getQueueLength(Direction::East) > 0);
+    REQUIRE(gen.getQueueLength(Direction::West) > 0);
+}
+
+TEST_CASE("TrafficGenerator vehicle crossing simulation", "traffic")
+{
+    TrafficGenerator gen(2.0); // 2 vehicles per second per lane
+
+    // Generate traffic for 0.6 seconds
+    gen.generateTraffic(0.6, 0.0);
+    size_t waiting = gen.getTotalWaiting();
+    REQUIRE(waiting > 0);
+
+    // Start crossing with first vehicle from North lane
+    Vehicle *v = gen.peekNextVehicle(Direction::North);
+    REQUIRE(v != nullptr);
+    uint32_t vid = v->id;
+
+    bool started = gen.startCrossing(Direction::North, vid, 0.6);
+    REQUIRE(started == true);
+
+    // Complete crossing after 2 seconds (typical crossing time)
+    bool completed = gen.completeCrossing(vid, 2.6);
+    REQUIRE(completed == true);
+
+    // Should have one less vehicle waiting
+    REQUIRE(gen.getTotalWaiting() == waiting - 1);
+
+    // Should have one vehicle that has crossed
+    REQUIRE(gen.getTotalCrossed() == 1);
+}
+
+TEST_CASE("TrafficGenerator reset", "traffic")
+{
+    TrafficGenerator gen(2.0); // 2 vehicles per second per lane
+
+    // Generate traffic
+    gen.generateTraffic(0.6, 0.0);
+    REQUIRE(gen.getTotalWaiting() > 0);
+
+    // Reset
+    gen.reset();
+
+    // Should be empty
+    REQUIRE(gen.getTotalWaiting() == 0);
+    REQUIRE(gen.getTotalGenerated() == 0);
+    REQUIRE(gen.getTotalCrossed() == 0);
 }

@@ -2,6 +2,7 @@
 #include <iomanip>
 #include "SafetyChecker.hpp"
 #include "BasicLightController.hpp"
+#include "TrafficGenerator.hpp"
 
 using namespace crossroads;
 
@@ -111,6 +112,52 @@ int main()
     IntersectionState blockedTurn4 = allowedTurn4;
     blockedTurn4.north = LightState::Green;
     std::cout << "   turnWestSouth GREEN, North GREEN: " << (checker.isSafe(blockedTurn4) ? "✗ ALLOWED (ERROR)" : "✓ BLOCKED") << std::endl;
+
+    // Demo: Traffic Generator
+    std::cout << "\n\n=== Traffic Generator Demo ===" << std::endl;
+    TrafficGenerator traffic(0.3); // 0.3 vehicles per second per lane
+
+    std::cout << "\nGenerating traffic for 5 seconds..." << std::endl;
+    traffic.generateTraffic(5.0, 0.0);
+
+    std::cout << "\nQueue status after generation:" << std::endl;
+    std::cout << "  North queue: " << traffic.getQueueLength(Direction::North) << " vehicles" << std::endl;
+    std::cout << "  South queue: " << traffic.getQueueLength(Direction::South) << " vehicles" << std::endl;
+    std::cout << "  East queue:  " << traffic.getQueueLength(Direction::East) << " vehicles" << std::endl;
+    std::cout << "  West queue:  " << traffic.getQueueLength(Direction::West) << " vehicles" << std::endl;
+    std::cout << "  Total waiting: " << traffic.getTotalWaiting() << " vehicles" << std::endl;
+    std::cout << "  Total generated: " << traffic.getTotalGenerated() << " vehicles" << std::endl;
+
+    // Simulate some vehicles crossing
+    std::cout << "\nSimulating vehicle crossings..." << std::endl;
+    for (Direction dir : {Direction::North, Direction::South, Direction::East, Direction::West})
+    {
+        while (true)
+        {
+            Vehicle *v = traffic.peekNextVehicle(dir);
+            if (!v)
+                break;
+
+            uint32_t vid = v->id;
+            if (traffic.startCrossing(dir, vid, 5.5))
+            {
+                traffic.completeCrossing(vid, 7.5); // 2 seconds crossing time
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    std::cout << "  Vehicles crossed: " << traffic.getTotalCrossed() << std::endl;
+    std::cout << "  Remaining waiting: " << traffic.getTotalWaiting() << std::endl;
+
+    if (traffic.getTotalCrossed() > 0)
+    {
+        std::cout << "  Average wait time: " << std::fixed << std::setprecision(2)
+                  << traffic.getAverageWaitTime() << " seconds" << std::endl;
+    }
 
     return 0;
 }
