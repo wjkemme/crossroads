@@ -14,6 +14,7 @@ add_executable(crossroads
     src/BasicLightController.cpp
     src/TrafficGenerator.cpp
     src/SimulatorEngine.cpp
+    src/SimpleHttpUiServer.cpp
 )
 
 if(BUILD_TESTS)

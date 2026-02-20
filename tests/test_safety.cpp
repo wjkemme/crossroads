@@ -1,9 +1,11 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_all.hpp>
+#include <memory>
 #include "SafetyChecker.hpp"
 #include "BasicLightController.hpp"
 #include "TrafficGenerator.hpp"
 #include "SimulatorEngine.hpp"
+#include "TrafficLightControllers.hpp"
 
 using namespace crossroads;
 
@@ -405,4 +407,103 @@ TEST_CASE("SimulatorEngine tracks metrics correctly", "[engine]")
     auto metrics = engine.getMetrics();
     REQUIRE(metrics.total_time == Catch::Approx(5.0).margin(0.2));
     REQUIRE(metrics.vehicles_generated >= 0);
+}
+
+TEST_CASE("NullControlController flashes amber", "[controller][null]")
+{
+    NullControlController null_ctrl;
+
+    auto state = null_ctrl.getCurrentState();
+    REQUIRE(state.north == LightState::Orange);
+    REQUIRE(state.east == LightState::Orange);
+
+    null_ctrl.tick(1.0);
+    state = null_ctrl.getCurrentState();
+    REQUIRE(state.north == LightState::Red);
+    REQUIRE(state.east == LightState::Red);
+}
+
+TEST_CASE("SimulatorEngine can switch control modes", "[engine][controller]")
+{
+    SimulatorEngine engine(0.5, 10.0, 10.0);
+    REQUIRE(engine.getControlMode() == SimulatorEngine::ControlMode::Basic);
+
+    engine.setControlMode(SimulatorEngine::ControlMode::NullControl);
+    REQUIRE(engine.getControlMode() == SimulatorEngine::ControlMode::NullControl);
+
+    auto state = engine.getCurrentLightState();
+    REQUIRE(state.north == LightState::Orange);
+    REQUIRE(state.west == LightState::Orange);
+}
+
+TEST_CASE("SimulatorEngine falls back to null-control when unsafe", "[engine][fallback]")
+{
+    class UnsafeController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.east = LightState::Green;
+            s.south = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+
+        void reset() override {}
+    };
+
+    SimulatorEngine engine(0.5, 10.0, 10.0);
+    engine.setController(std::make_unique<UnsafeController>(), SimulatorEngine::ControlMode::Basic);
+
+    engine.start();
+    engine.tick(0.1);
+    REQUIRE(engine.getControlMode() == SimulatorEngine::ControlMode::NullControl);
+    REQUIRE(engine.getMetrics().safety_violations >= 1);
+}
+
+TEST_CASE("SimulatorEngine UI commands control run state", "[engine][ui]")
+{
+    SimulatorEngine engine(0.5, 10.0, 10.0);
+
+    REQUIRE(engine.isRunning() == false);
+    engine.handleCommand(SimulatorEngine::UICommand::Start);
+    REQUIRE(engine.isRunning() == true);
+
+    engine.tick(0.2);
+    auto started_metrics = engine.getMetrics();
+    REQUIRE(started_metrics.total_time > 0.0);
+
+    engine.handleCommand(SimulatorEngine::UICommand::Stop);
+    REQUIRE(engine.isRunning() == false);
+
+    double frozen_time = engine.getMetrics().total_time;
+    engine.tick(0.5);
+    REQUIRE(engine.getMetrics().total_time == Catch::Approx(frozen_time));
+
+    engine.handleCommand(SimulatorEngine::UICommand::Step, 0.1);
+    REQUIRE(engine.getMetrics().total_time == Catch::Approx(frozen_time + 0.1));
+
+    engine.handleCommand(SimulatorEngine::UICommand::Reset);
+    REQUIRE(engine.getMetrics().total_time == Catch::Approx(0.0));
+    REQUIRE(engine.isRunning() == false);
+}
+
+TEST_CASE("SimulatorEngine snapshot JSON includes UI fields", "[engine][ui]")
+{
+    SimulatorEngine engine(0.8, 10.0, 10.0);
+    engine.start();
+    engine.tick(0.1);
+
+    std::string json = engine.getSnapshotJson();
+
+    REQUIRE(json.find("\"sim_time\"") != std::string::npos);
+    REQUIRE(json.find("\"running\":true") != std::string::npos);
+    REQUIRE(json.find("\"metrics\"") != std::string::npos);
+    REQUIRE(json.find("\"queues\"") != std::string::npos);
+    REQUIRE(json.find("\"lights\"") != std::string::npos);
+    REQUIRE(json.find("\"north\"") != std::string::npos);
 }
