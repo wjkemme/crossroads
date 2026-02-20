@@ -1,11 +1,14 @@
 #pragma once
 
 #include <vector>
-#include <queue>
+#include <deque>
 #include <cstdint>
 #include "Vehicle.hpp"
 #include "Intersection.hpp"
 
+// Add these constants after the class declaration begins:
+static constexpr double VEHICLE_SPACING = 5.0; // meters
+static constexpr size_t LANE_CAPACITY = 10;    // vehicles
 namespace crossroads
 {
 
@@ -44,22 +47,26 @@ namespace crossroads
         // Reset all state
         void reset();
 
+        void updateVehicleSpeeds(double dt_seconds);
+        double getAverageQueueDensity(Direction dir) const;
+
     private:
         double arrival_rate;      // vehicles per second per lane
         double time_accumulated;  // accumulated time for next spawn calculation
         uint32_t next_vehicle_id; // counter for unique IDs
 
         // Vehicle queues for each direction
-        std::queue<Vehicle> north_queue;
-        std::queue<Vehicle> east_queue;
-        std::queue<Vehicle> south_queue;
-        std::queue<Vehicle> west_queue;
+        std::deque<Vehicle> north_queue;
+        std::deque<Vehicle> east_queue;
+        std::deque<Vehicle> south_queue;
+        std::deque<Vehicle> west_queue;
 
         // Vehicles that have completed crossing
         std::vector<Vehicle> crossed_vehicles;
 
         // Helper to get queue reference by direction
-        std::queue<Vehicle> &getQueueByDirection(Direction dir);
+        std::deque<Vehicle> &getQueueByDirection(Direction dir);
+        const std::deque<Vehicle> &getQueueByDirection(Direction dir) const;
 
         // Helper to calculate next spawn time using Poisson-like distribution
         double getNextSpawnInterval();

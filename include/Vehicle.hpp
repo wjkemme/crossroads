@@ -1,11 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
 
 namespace crossroads
 {
-
-    // Direction of the lane where vehicle enters the intersection
     enum class Direction
     {
         North = 0,
@@ -14,19 +13,20 @@ namespace crossroads
         West = 3
     };
 
-    // Represents a single vehicle approaching or crossing the intersection
     struct Vehicle
     {
-        uint32_t id;          // Unique vehicle identifier
-        Direction entry_lane; // Which lane the vehicle is entering from
-        double arrival_time;  // When the vehicle arrived at the queue
-        double crossing_time; // When the vehicle started crossing (or -1 if not started)
-        double exit_time;     // When the vehicle completed crossing (or -1 if not completed)
+        uint32_t id;
+        Direction entry_lane;
+        double arrival_time;
+        double crossing_time;
+        double exit_time;
+        double current_speed;      // m/s, range [0, 10]
+        double position_in_lane;   // meters from queue start
 
-        // Convenience methods
         Vehicle(uint32_t vid, Direction lane, double arrival)
             : id(vid), entry_lane(lane), arrival_time(arrival),
-              crossing_time(-1.0), exit_time(-1.0) {}
+              crossing_time(-1.0), exit_time(-1.0),
+              current_speed(0.0), position_in_lane(0.0) {}
 
         bool isWaiting() const { return crossing_time < 0.0; }
         bool isCrossing() const { return crossing_time >= 0.0 && exit_time < 0.0; }
@@ -35,15 +35,37 @@ namespace crossroads
         double waitTime() const
         {
             if (crossing_time < 0.0)
-                return -1.0; // Not yet crossed
+                return -1.0;
             return crossing_time - arrival_time;
         }
 
         double crossingDuration() const
         {
             if (exit_time < 0.0)
-                return -1.0; // Not yet complete
+                return -1.0;
             return exit_time - crossing_time;
+        }
+
+        void updateSpeed(double target_speed, double dt_seconds)
+        {
+            const double ACCEL = 0.5;  // m/s²
+            target_speed = std::max(0.0, std::min(10.0, target_speed));
+            
+            double delta = target_speed - current_speed;
+            double max_change = ACCEL * dt_seconds;
+            
+            if (std::abs(delta) <= max_change)
+                current_speed = target_speed;
+            else if (delta > 0.0)
+                current_speed += max_change;
+            else
+                current_speed -= max_change;
+        }
+
+        double getCrossingDuration(size_t queue_length) const
+        {
+            double density = std::min(1.0, queue_length / 10.0);
+            return 2.0 + (density * 2.0);  // 2.0-4.0 sec range
         }
     };
 

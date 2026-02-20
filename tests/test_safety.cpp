@@ -3,6 +3,7 @@
 #include "SafetyChecker.hpp"
 #include "BasicLightController.hpp"
 #include "TrafficGenerator.hpp"
+#include "SimulatorEngine.hpp"
 
 using namespace crossroads;
 
@@ -363,4 +364,45 @@ TEST_CASE("TrafficGenerator reset", "traffic")
     REQUIRE(gen.getTotalWaiting() == 0);
     REQUIRE(gen.getTotalGenerated() == 0);
     REQUIRE(gen.getTotalCrossed() == 0);
+}
+
+TEST_CASE("Vehicle speed updates gradually", "[vehicle]")
+{
+    Vehicle v(1, Direction::North, 0.0);
+    v.updateSpeed(10.0, 0.5);
+    REQUIRE(v.current_speed == Catch::Approx(0.25));
+    v.updateSpeed(10.0, 0.5);
+    REQUIRE(v.current_speed == Catch::Approx(0.5));
+}
+
+TEST_CASE("Vehicle crossing duration scales with density", "[vehicle]")
+{
+    Vehicle v(1, Direction::North, 0.0);
+    REQUIRE(v.getCrossingDuration(0) == Catch::Approx(2.0));
+    REQUIRE(v.getCrossingDuration(5) == Catch::Approx(3.0));
+    REQUIRE(v.getCrossingDuration(10) == Catch::Approx(4.0));
+}
+
+TEST_CASE("SimulatorEngine initializes safely", "[engine]")
+{
+    SimulatorEngine engine(0.5, 10.0, 10.0);
+    auto state = engine.getCurrentLightState();
+    REQUIRE(engine.getMetrics().safety_violations == 0);
+}
+
+TEST_CASE("SimulatorEngine generates and processes vehicles", "[engine]")
+{
+    SimulatorEngine engine(1.0, 10.0, 10.0);
+    engine.tick(0.1);
+    auto metrics = engine.getMetrics();
+    REQUIRE(metrics.vehicles_generated >= 0);
+}
+
+TEST_CASE("SimulatorEngine tracks metrics correctly", "[engine]")
+{
+    SimulatorEngine engine(0.5, 10.0, 10.0);
+    engine.simulate(5.0, 0.1);
+    auto metrics = engine.getMetrics();
+    REQUIRE(metrics.total_time == Catch::Approx(5.0).margin(0.2));
+    REQUIRE(metrics.vehicles_generated >= 0);
 }

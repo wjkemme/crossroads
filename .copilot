@@ -35,7 +35,7 @@ crossroads/
 - **Safety**: Before we start working on smarter control algorithms, we need to ensure that the crossroads are always in a safe state. Therefore, in between the control algorithm and the interface to the traffic lights, a safety checker will be added. The safety checker warrants the consistency of commands to the traffic lights. The safety checker implements a series of rules and rigorously checks that none of the rules are violated at any time.
 - This approach ensures that conflicting signals—such as multiple directions showing green at the same time—are systematically prevented. The safety checker acts as a safeguard layer, monitoring all light changes and enforcing critical safety constraints regardless of the logic produced by the control algorithm. By introducing this component, the integrity and reliability of the intersection control system are significantly strengthened, reducing the risk of accidents caused by software errors or unforeseen circumstances.
 - ORM: sqlite_orm
-- QT message queing tussen server en client UI communicatie als dat mogelijk is en anders WebSocket/REST
+- gebruik tussen server en client UI communicatie WebSocket/REST
 - CMake
 
 ## Traffic light states and transitions
@@ -56,6 +56,38 @@ crossroads/
 - Each turn light follows the same transition rules: `Red -> Green -> Orange -> Red`
 - Orange duration: 2 seconds (same as main lights)
 
+## Vehicle Spacing & Speed
+
+**Implementation Details:**
+- Each vehicle has `current_speed` (0-10 m/s) and `position_in_lane` (meters).
+- Speed updates use constant acceleration: **0.5 m/s²** (prevents unrealistic instant changes).
+- Vehicle spacing: **5.0 meters** minimum between fronts (discrete queue model).
+- **No overtaking**: When a vehicle detects a blocked path (spacing < 5m), it decelerates to 0 m/s.
+- Crossing time scales with congestion: `2.0 + (density × 2.0)` seconds (2-4 sec range).
+- `updateVehicleSpeeds()` runs per tick, updating all vehicles per direction.
+
+## SimulatorEngine Architecture
+
+**Purpose:** Orchestrates all components into a unified simulation.
+
+**Components:**
+- `SafetyChecker`: Validates all state transitions
+- `BasicLightController`: Drives 4-phase light cycling
+- `TrafficGenerator`: Manages vehicle queues + speed updates
+- `SimulatorMetrics`: Tracks performance (vehicles crossed, avg wait, violations)
+
+**Simulation Loop (per tick):**
+1. Generate traffic (Poisson-like arrivals)
+2. Update vehicle speeds (0.5 m/s² acceleration/deceleration)
+3. Start crossing vehicles (if light green)
+4. Complete crossing vehicles (based on density-scaled duration)
+5. Advance light controller
+6. Validate state with SafetyChecker (count violations)
+
+**Key Methods:**
+- `simulate(duration, dt)`: Run full simulation
+- `tick(dt)`: Single time step
+- `getMetrics()`: Query performance data
 
 ## Iteration: Different Control Algorithms
 To enable smarter traffic management, the system needs to support multiple control algorithms and provide a mechanism for switching between them seamlessly. This begins with designing the application architecture so that different algorithms—such as the basic clock-driven control, the “null-control” (amber flashing mode), and more advanced logic—can coexist and be selected as needed. The ability to switch algorithms dynamically is crucial for both operational flexibility and safety.

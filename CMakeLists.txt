@@ -12,6 +12,8 @@ add_executable(crossroads
     src/main.cpp
     src/SafetyChecker.cpp
     src/BasicLightController.cpp
+    src/TrafficGenerator.cpp
+    src/SimulatorEngine.cpp
 )
 
 if(BUILD_TESTS)
@@ -27,6 +29,8 @@ if(BUILD_TESTS)
         tests/test_safety.cpp
         src/SafetyChecker.cpp
         src/BasicLightController.cpp
+        src/TrafficGenerator.cpp
+        src/SimulatorEngine.cpp
     )
     target_link_libraries(test_safety PRIVATE Catch2::Catch2WithMain)
     include(CTest)
