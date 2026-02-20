@@ -33,11 +33,17 @@ namespace crossroads
             return;
         }
 
+        advanceController(dt);
+
         generateTraffic(dt);
-        traffic.updateVehicleSpeeds(dt);
+        std::array<bool, 4> lane_can_move = {
+            isLightGreen(Direction::North),
+            isLightGreen(Direction::South),
+            isLightGreen(Direction::East),
+            isLightGreen(Direction::West)};
+        traffic.updateVehicleSpeeds(dt, lane_can_move);
         processVehicleCrossings();
         completeVehicleCrossings();
-        advanceController(dt);
 
         if (!checker.isSafe(getCurrentLightState()))
         {
@@ -147,6 +153,34 @@ namespace crossroads
 
     std::string SimulatorEngine::getSnapshotJson() const
     {
+        auto northVehicles = traffic.getLaneVehicleStates(Direction::North);
+        auto eastVehicles = traffic.getLaneVehicleStates(Direction::East);
+        auto southVehicles = traffic.getLaneVehicleStates(Direction::South);
+        auto westVehicles = traffic.getLaneVehicleStates(Direction::West);
+
+        auto appendLaneVehicles = [](std::ostringstream &out, const std::vector<LaneVehicleState> &vehicles)
+        {
+            out << "[";
+            for (size_t i = 0; i < vehicles.size(); ++i)
+            {
+                const auto &v = vehicles[i];
+                if (i > 0)
+                {
+                    out << ",";
+                }
+                out << "{";
+                out << "\"id\":" << v.id << ",";
+                out << "\"position\":" << v.position_in_lane << ",";
+                out << "\"speed\":" << v.speed << ",";
+                out << "\"crossing\":" << (v.crossing ? "true" : "false") << ",";
+                out << "\"turning\":" << (v.turning ? "true" : "false") << ",";
+                out << "\"crossing_time\":" << v.crossing_time << ",";
+                out << "\"crossing_duration\":" << v.crossing_duration;
+                out << "}";
+            }
+            out << "]";
+        };
+
         SimulatorSnapshot snapshot = getSnapshot();
         std::ostringstream out;
         out << "{";
@@ -172,6 +206,16 @@ namespace crossroads
         out << "\"turnNorthWest\":\"" << toString(snapshot.lights.turnNorthWest) << "\",";
         out << "\"turnWestSouth\":\"" << toString(snapshot.lights.turnWestSouth) << "\",";
         out << "\"turnEastNorth\":\"" << toString(snapshot.lights.turnEastNorth) << "\"";
+        out << "},";
+        out << "\"lanes\":{";
+        out << "\"north\":";
+        appendLaneVehicles(out, northVehicles);
+        out << ",\"east\":";
+        appendLaneVehicles(out, eastVehicles);
+        out << ",\"south\":";
+        appendLaneVehicles(out, southVehicles);
+        out << ",\"west\":";
+        appendLaneVehicles(out, westVehicles);
         out << "}}";
         return out.str();
     }

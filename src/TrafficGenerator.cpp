@@ -2,6 +2,12 @@
 
 namespace crossroads
 {
+    namespace
+    {
+        constexpr double CAR_LENGTH_METERS = 4.0;
+        constexpr double MIN_FREE_GAP_METERS = CAR_LENGTH_METERS * 0.5;
+        constexpr double MIN_FRONT_DISTANCE_METERS = CAR_LENGTH_METERS + MIN_FREE_GAP_METERS;
+    }
 
     TrafficGenerator::TrafficGenerator(double rate)
         : arrival_rate(rate), time_accumulated(0.0), next_vehicle_id(1)
@@ -62,7 +68,13 @@ namespace crossroads
             for (Direction dir : directions)
             {
                 Vehicle v(next_vehicle_id++, dir, current_time);
-                getQueueByDirection(dir).push_back(v);
+                v.turning = (v.id % 5 == 0);
+                auto &queue = getQueueByDirection(dir);
+                if (!queue.empty())
+                {
+                    v.position_in_lane = queue.back().position_in_lane - MIN_FRONT_DISTANCE_METERS;
+                }
+                queue.push_back(v);
             }
         }
     }
@@ -154,8 +166,10 @@ namespace crossroads
         next_vehicle_id = 1;
     }
 
-    void TrafficGenerator::updateVehicleSpeeds(double dt_seconds)
+    void TrafficGenerator::updateVehicleSpeeds(double dt_seconds, const std::array<bool, 4> &lane_can_move)
     {
+        const double STOP_LINE_POSITION = 70.0;
+
         for (int dir = 0; dir < 4; ++dir)
         {
             Direction d = static_cast<Direction>(dir);
@@ -170,19 +184,84 @@ namespace crossroads
 
                 double target_speed = 10.0; // Default max speed
 
+                // Front vehicle must stop at red light
+                if (i == 0 && !lane_can_move[dir] && vehicle.position_in_lane < STOP_LINE_POSITION)
+                {
+                    // Calculate braking distance needed to stop at stop line
+                    const double distance_to_stopline = STOP_LINE_POSITION - vehicle.position_in_lane;
+                    // v² = 2*a*d → v = sqrt(2*a*d), with comfortable decel of 3 m/s²
+                    const double safe_speed = std::sqrt(2.0 * 3.0 * distance_to_stopline);
+                    target_speed = std::max(0.0, std::min(target_speed, safe_speed));
+                }
+
+                // Check spacing to vehicle ahead
                 if (i > 0)
                 {
                     const Vehicle &ahead = queue[i - 1];
-                    double spacing = ahead.position_in_lane - vehicle.position_in_lane;
 
-                    if (spacing < VEHICLE_SPACING)
-                        target_speed = 0.0; // Blocked by vehicle ahead
+                    // If vehicle ahead is crossing, wait at stop line
+                    if (ahead.isCrossing())
+                    {
+                        const double distance_to_stopline = STOP_LINE_POSITION - vehicle.position_in_lane;
+                        if (distance_to_stopline > 0)
+                        {
+                            const double safe_speed = std::sqrt(2.0 * 3.0 * std::max(0.1, distance_to_stopline - 2.0));
+                            target_speed = std::min(target_speed, safe_speed);
+                        }
+                        else
+                        {
+                            target_speed = 0.0;
+                        }
+                    }
+                    else
+                    {
+                        // Normal following distance
+                        double spacing = ahead.position_in_lane - vehicle.position_in_lane;
+                        if (spacing < MIN_FRONT_DISTANCE_METERS * 1.5)
+                        {
+                            target_speed = std::min(target_speed, ahead.current_speed * 0.8);
+                        }
+                        if (spacing < MIN_FRONT_DISTANCE_METERS)
+                        {
+                            target_speed = 0.0;
+                        }
+                    }
                 }
 
                 vehicle.updateSpeed(target_speed, dt_seconds);
 
                 if (!vehicle.isCrossing())
+                {
+                    double previous_position = vehicle.position_in_lane;
                     vehicle.position_in_lane += vehicle.current_speed * dt_seconds;
+
+                    // Hard stop at stop line if light is red
+                    if (!lane_can_move[dir] && vehicle.position_in_lane >= STOP_LINE_POSITION)
+                    {
+                        vehicle.position_in_lane = STOP_LINE_POSITION;
+                        vehicle.current_speed = 0.0;
+                    }
+
+                    // Maintain safe distance behind vehicle ahead
+                    if (i > 0)
+                    {
+                        const Vehicle &ahead = queue[i - 1];
+                        double max_pos;
+                        if (ahead.isCrossing())
+                        {
+                            max_pos = STOP_LINE_POSITION - 2.0;
+                        }
+                        else
+                        {
+                            max_pos = ahead.position_in_lane - MIN_FRONT_DISTANCE_METERS;
+                        }
+                        if (vehicle.position_in_lane > max_pos)
+                        {
+                            vehicle.position_in_lane = max_pos;
+                            vehicle.current_speed = std::min(vehicle.current_speed, ahead.current_speed);
+                        }
+                    }
+                }
             }
         }
     }
@@ -190,6 +269,29 @@ namespace crossroads
     double TrafficGenerator::getAverageQueueDensity(Direction dir) const
     {
         return std::min(1.0, static_cast<double>(getQueueByDirection(dir).size()) / LANE_CAPACITY);
+    }
+
+    std::vector<LaneVehicleState> TrafficGenerator::getLaneVehicleStates(Direction dir) const
+    {
+        std::vector<LaneVehicleState> states;
+        const auto &queue = getQueueByDirection(dir);
+        states.reserve(queue.size());
+        const size_t queue_len = queue.size();
+
+        for (const auto &vehicle : queue)
+        {
+            LaneVehicleState state;
+            state.id = vehicle.id;
+            state.position_in_lane = vehicle.position_in_lane;
+            state.speed = vehicle.current_speed;
+            state.crossing = vehicle.isCrossing();
+            state.turning = vehicle.turning;
+            state.crossing_time = vehicle.crossing_time;
+            state.crossing_duration = vehicle.getCrossingDuration(queue_len);
+            states.push_back(state);
+        }
+
+        return states;
     }
 
 } // namespace crossroads

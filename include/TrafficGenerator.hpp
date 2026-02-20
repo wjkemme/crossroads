@@ -3,6 +3,7 @@
 #include <vector>
 #include <deque>
 #include <cstdint>
+#include <array>
 #include "Vehicle.hpp"
 #include "Intersection.hpp"
 
@@ -11,6 +12,17 @@ static constexpr double VEHICLE_SPACING = 5.0; // meters
 static constexpr size_t LANE_CAPACITY = 10;    // vehicles
 namespace crossroads
 {
+
+    struct LaneVehicleState
+    {
+        uint32_t id = 0;
+        double position_in_lane = 0.0;
+        double speed = 0.0;
+        bool crossing = false;
+        bool turning = false;
+        double crossing_time = -1.0;
+        double crossing_duration = 0.0;
+    };
 
     class TrafficGenerator
     {
@@ -47,8 +59,9 @@ namespace crossroads
         // Reset all state
         void reset();
 
-        void updateVehicleSpeeds(double dt_seconds);
+        void updateVehicleSpeeds(double dt_seconds, const std::array<bool, 4> &lane_can_move);
         double getAverageQueueDensity(Direction dir) const;
+        std::vector<LaneVehicleState> getLaneVehicleStates(Direction dir) const;
 
     private:
         double arrival_rate;      // vehicles per second per lane

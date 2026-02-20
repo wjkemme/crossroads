@@ -505,5 +505,6 @@ TEST_CASE("SimulatorEngine snapshot JSON includes UI fields", "[engine][ui]")
     REQUIRE(json.find("\"metrics\"") != std::string::npos);
     REQUIRE(json.find("\"queues\"") != std::string::npos);
     REQUIRE(json.find("\"lights\"") != std::string::npos);
+    REQUIRE(json.find("\"lanes\"") != std::string::npos);
     REQUIRE(json.find("\"north\"") != std::string::npos);
 }

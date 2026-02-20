@@ -20,13 +20,14 @@ namespace crossroads
         double arrival_time;
         double crossing_time;
         double exit_time;
-        double current_speed;      // m/s, range [0, 10]
-        double position_in_lane;   // meters from queue start
+        double current_speed;    // m/s, range [0, 10]
+        double position_in_lane; // meters from queue start
+        bool turning;            // true when vehicle uses turn lane
 
         Vehicle(uint32_t vid, Direction lane, double arrival)
             : id(vid), entry_lane(lane), arrival_time(arrival),
               crossing_time(-1.0), exit_time(-1.0),
-              current_speed(0.0), position_in_lane(0.0) {}
+              current_speed(0.0), position_in_lane(0.0), turning(false) {}
 
         bool isWaiting() const { return crossing_time < 0.0; }
         bool isCrossing() const { return crossing_time >= 0.0 && exit_time < 0.0; }
@@ -48,12 +49,12 @@ namespace crossroads
 
         void updateSpeed(double target_speed, double dt_seconds)
         {
-            const double ACCEL = 0.5;  // m/s²
+            const double ACCEL = 0.5; // m/s²
             target_speed = std::max(0.0, std::min(10.0, target_speed));
-            
+
             double delta = target_speed - current_speed;
             double max_change = ACCEL * dt_seconds;
-            
+
             if (std::abs(delta) <= max_change)
                 current_speed = target_speed;
             else if (delta > 0.0)
@@ -65,7 +66,9 @@ namespace crossroads
         double getCrossingDuration(size_t queue_length) const
         {
             double density = std::min(1.0, queue_length / 10.0);
-            return 2.0 + (density * 2.0);  // 2.0-4.0 sec range
+            double base = 2.5 + (density * 2.0); // 2.5-4.5 sec range
+            // Turning vehicles travel longer arc path, need more time
+            return turning ? base * 1.6 : base;
         }
     };
 
