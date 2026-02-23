@@ -64,15 +64,21 @@ namespace crossroads
 
     void SimulatorEngine::processVehicleCrossings()
     {
+        // Start crossing for ALL vehicles that have reached de stopzone (4m voor streep)
+        const double STOP_TARGET = 66.0;
+
         for (int dir = 0; dir < 4; ++dir)
         {
             Direction lane = static_cast<Direction>(dir);
             if (isLightGreen(lane))
             {
-                Vehicle *v = traffic.peekNextVehicle(lane);
-                if (v && v->isWaiting())
+                auto &queue = traffic.getQueueByDirection(lane);
+                for (auto &vehicle : queue)
                 {
-                    traffic.startCrossing(lane, v->id, current_time);
+                    if (vehicle.isWaiting() && vehicle.position_in_lane >= STOP_TARGET)
+                    {
+                        vehicle.crossing_time = current_time;
+                    }
                 }
             }
         }
@@ -80,6 +86,7 @@ namespace crossroads
 
     void SimulatorEngine::completeVehicleCrossings()
     {
+        // Complete crossing for the front vehicle when it has finished
         for (int dir = 0; dir < 4; ++dir)
         {
             Direction lane = static_cast<Direction>(dir);
@@ -175,7 +182,8 @@ namespace crossroads
                 out << "\"crossing\":" << (v.crossing ? "true" : "false") << ",";
                 out << "\"turning\":" << (v.turning ? "true" : "false") << ",";
                 out << "\"crossing_time\":" << v.crossing_time << ",";
-                out << "\"crossing_duration\":" << v.crossing_duration;
+                out << "\"crossing_duration\":" << v.crossing_duration << ",";
+                out << "\"queue_index\":" << static_cast<int>(v.queue_index);
                 out << "}";
             }
             out << "]";

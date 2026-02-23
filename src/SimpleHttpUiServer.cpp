@@ -93,34 +93,26 @@ namespace crossroads
             overflow: visible;
         }
 
+        /* Main lanes: 2 straight + 1 turn lane (48px total, 16px each) */
         .lane.west-east {
             left: 0; right: 0; top: 50%; height: 48px;
-            background: linear-gradient(to bottom,
-                rgba(148, 163, 184, 0.10) 0 16px,
-                rgba(148, 163, 184, 0.10) 16px 32px,
-                rgba(245, 158, 11, 0.20) 32px 48px);
+            background: rgba(148, 163, 184, 0.10);
         }
         .lane.east-west {
             left: 0; right: 0; top: calc(50% - 48px); height: 48px;
-            background: linear-gradient(to bottom,
-                rgba(245, 158, 11, 0.20) 0 16px,
-                rgba(148, 163, 184, 0.10) 16px 32px,
-                rgba(148, 163, 184, 0.10) 32px 48px);
+            background: rgba(148, 163, 184, 0.10);
         }
         .lane.north-south {
             top: 0; bottom: 0; left: calc(50% - 48px); width: 48px;
-            background: linear-gradient(to right,
-                rgba(245, 158, 11, 0.20) 0 16px,
-                rgba(148, 163, 184, 0.10) 16px 32px,
-                rgba(148, 163, 184, 0.10) 32px 48px);
+            background: rgba(148, 163, 184, 0.10);
         }
         .lane.south-north {
             top: 0; bottom: 0; left: 50%; width: 48px;
-            background: linear-gradient(to right,
-                rgba(148, 163, 184, 0.10) 0 16px,
-                rgba(148, 163, 184, 0.10) 16px 32px,
-                rgba(245, 158, 11, 0.20) 32px 48px);
+            background: rgba(148, 163, 184, 0.10);
         }
+
+        /* Separate uitvoeg/invoeg elements no longer needed - integrated in 48px lane */
+        /* Uitvoeg/invoeg CSS no longer needed - integrated into 48px lanes */
 
         .stop-line { position: absolute; background: #f8fafc; opacity: 0.95; z-index: 5; }
         .stop-line.west-east { left: calc(50% - 52px); top: 50%; width: 3px; height: 48px; }
@@ -128,59 +120,7 @@ namespace crossroads
         .stop-line.north-south { left: calc(50% - 48px); top: calc(50% - 52px); width: 48px; height: 3px; }
         .stop-line.south-north { left: 50%; top: calc(50% + 50px); width: 48px; height: 3px; }
 
-        .turn-cut {
-            position: absolute;
-            background: #111827;
-            z-index: 4;
-            opacity: 0.95;
-        }
-        .turn-cut.we { left: calc(50% - 50px); right: 0; top: calc(50% + 32px); height: 16px; }
-        .turn-cut.ew { left: 0; right: calc(50% - 50px); top: calc(50% - 48px); height: 16px; }
-        .turn-cut.ns { left: calc(50% - 48px); top: calc(50% - 50px); bottom: 0; width: 16px; }
-        .turn-cut.sn { left: calc(50% + 32px); top: 0; bottom: calc(50% - 50px); width: 16px; }
-
-        .turn-link {
-            position: absolute;
-            z-index: 4;
-            pointer-events: none;
-            border: 13px solid rgba(245, 158, 11, 0.30);
-        }
-        .turn-link.ws {
-            left: calc(50% - 60px);
-            top: calc(50% - 8px);
-            width: 56px;
-            height: 56px;
-            border-top: 0;
-            border-left: 0;
-            border-radius: 0 0 56px 0;
-        }
-        .turn-link.en {
-            left: calc(50% + 2px);
-            top: calc(50% - 60px);
-            width: 56px;
-            height: 56px;
-            border-right: 0;
-            border-bottom: 0;
-            border-radius: 56px 0 0 0;
-        }
-        .turn-link.nw {
-            left: calc(50% - 60px);
-            top: calc(50% - 60px);
-            width: 56px;
-            height: 56px;
-            border-top: 0;
-            border-right: 0;
-            border-radius: 0 0 0 56px;
-        }
-        .turn-link.se {
-            left: calc(50% + 2px);
-            top: calc(50% - 8px);
-            width: 56px;
-            height: 56px;
-            border-left: 0;
-            border-bottom: 0;
-            border-radius: 0 56px 0 0;
-        }
+        /* No turn-cut needed anymore - slip roads are separate */
 
         .dir-arrow {
             position: absolute;
@@ -193,8 +133,8 @@ namespace crossroads
             pointer-events: none;
         }
         .arrow-we { left: calc(50% - 150px); top: calc(50% + 12px); }
-        .arrow-ew { left: calc(50% + 70px); top: calc(50% - 36px); }
-        .arrow-ns { left: calc(50% - 36px); top: calc(50% - 150px); }
+        .arrow-ew { left: calc(50% + 70px); top: calc(50% - 32px); }
+        .arrow-ns { left: calc(50% - 32px); top: calc(50% - 150px); }
         .arrow-sn { left: calc(50% + 12px); top: calc(50% + 70px); }
 
         .approach-signal {
@@ -222,6 +162,7 @@ namespace crossroads
             border-color: #fecaca;
             box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9), 0 0 8px rgba(239, 68, 68, 0.65);
         }
+        /* 3 signals per direction (2 straight + 1 turn) */
         .sig-north-0 { left: calc(50% - 44px); top: calc(50% - 68px); }
         .sig-north-1 { left: calc(50% - 28px); top: calc(50% - 68px); }
         .sig-north-2 { left: calc(50% - 12px); top: calc(50% - 68px); }
@@ -252,26 +193,32 @@ namespace crossroads
                 transparent 5px 10px
             );
         }
+        /* Two dashed lines per lane direction (between 3 lanes) */
         .lane.west-east::before, .lane.east-west::before { top: 16px; }
         .lane.west-east::after, .lane.east-west::after { top: 32px; }
 
-        .lane.north-south::before, .lane.north-south::after,
-        .lane.south-north::before, .lane.south-north::after {
-            top: 0; bottom: 0; width: 1px;
+        .lane.north-south::before, .lane.south-north::before {
+            top: 0; bottom: 0; width: 1px; left: 16px;
             background: repeating-linear-gradient(
                 to bottom,
                 rgba(226, 232, 240, 0.8) 0 5px,
                 transparent 5px 10px
             );
         }
-        .lane.north-south::before, .lane.south-north::before { left: 16px; }
-        .lane.north-south::after, .lane.south-north::after { left: 32px; }
+        .lane.north-south::after, .lane.south-north::after {
+            top: 0; bottom: 0; width: 1px; left: 32px;
+            background: repeating-linear-gradient(
+                to bottom,
+                rgba(226, 232, 240, 0.8) 0 5px,
+                transparent 5px 10px
+            );
+        }
 
         .lane-label { position: absolute; font-size: 11px; color: #94a3b8; background: rgba(15, 23, 42, 0.65); padding: 2px 6px; border-radius: 6px; }
         .lbl-we { left: 12px; top: calc(50% + 52px); }
         .lbl-ew { right: 12px; top: calc(50% - 68px); }
-        .lbl-ns { left: calc(50% - 148px); top: 12px; }
-        .lbl-sn { left: calc(50% + 56px); bottom: 12px; }
+        .lbl-ns { left: calc(50% - 164px); top: 12px; }
+        .lbl-sn { left: calc(50% + 52px); bottom: 12px; }
 
         .lane-arrow {
             position: absolute;
@@ -287,21 +234,26 @@ namespace crossroads
             color: #fbbf24;
             font-size: 14px;
         }
-        .arr-we-1 { left: calc(50% - 100px); top: calc(50% + 5px); }
-        .arr-we-2 { left: calc(50% - 100px); top: calc(50% + 21px); }
-        .arr-we-t { left: calc(50% - 100px); top: calc(50% + 37px); }
+        /* Arrow positions: centered in each 16px lane (3 lanes per direction) */
+        /* W->E: lane top=50%, lanes at +8px, +24px, +40px */
+        .arr-we-1 { left: calc(50% - 100px); top: calc(50% + 4px); }
+        .arr-we-2 { left: calc(50% - 100px); top: calc(50% + 20px); }
+        .arr-we-t { left: calc(50% - 100px); top: calc(50% + 36px); }
 
-        .arr-ew-t { left: calc(50% + 80px); top: calc(50% - 43px); }
-        .arr-ew-1 { left: calc(50% + 80px); top: calc(50% - 27px); }
-        .arr-ew-2 { left: calc(50% + 80px); top: calc(50% - 11px); }
+        /* E->W: lane top=50%-48px, lanes at -40px, -24px, -8px */
+        .arr-ew-t { left: calc(50% + 80px); top: calc(50% - 44px); }
+        .arr-ew-1 { left: calc(50% + 80px); top: calc(50% - 28px); }
+        .arr-ew-2 { left: calc(50% + 80px); top: calc(50% - 12px); }
 
-        .arr-ns-1 { left: calc(50% - 43px); top: calc(50% - 100px); }
-        .arr-ns-2 { left: calc(50% - 27px); top: calc(50% - 100px); }
-        .arr-ns-t { left: calc(50% - 11px); top: calc(50% - 100px); }
+        /* N->S: lane left=50%-48px, lanes at -40px, -24px, -8px */
+        .arr-ns-t { left: calc(50% - 44px); top: calc(50% - 100px); }
+        .arr-ns-1 { left: calc(50% - 28px); top: calc(50% - 100px); }
+        .arr-ns-2 { left: calc(50% - 12px); top: calc(50% - 100px); }
 
-        .arr-sn-1 { left: calc(50% + 5px); top: calc(50% + 80px); }
-        .arr-sn-2 { left: calc(50% + 21px); top: calc(50% + 80px); }
-        .arr-sn-t { left: calc(50% + 37px); top: calc(50% + 80px); }
+        /* S->N: lane left=50%, lanes at +8px, +24px, +40px */
+        .arr-sn-1 { left: calc(50% + 4px); top: calc(50% + 80px); }
+        .arr-sn-2 { left: calc(50% + 20px); top: calc(50% + 80px); }
+        .arr-sn-t { left: calc(50% + 36px); top: calc(50% + 80px); }
 
         .car {
             position: absolute;
@@ -359,25 +311,10 @@ namespace crossroads
             <div class="lane north-south" id="lane-north"></div>
             <div class="lane south-north" id="lane-south"></div>
 
-            <div class="turn-cut we"></div>
-            <div class="turn-cut ew"></div>
-            <div class="turn-cut ns"></div>
-            <div class="turn-cut sn"></div>
-
-            <div class="turn-link ws"></div>
-            <div class="turn-link en"></div>
-            <div class="turn-link nw"></div>
-            <div class="turn-link se"></div>
-
             <div class="stop-line west-east"></div>
             <div class="stop-line east-west"></div>
             <div class="stop-line north-south"></div>
             <div class="stop-line south-north"></div>
-
-            <div class="dir-arrow arrow-we">→ → →</div>
-            <div class="dir-arrow arrow-ew">← ← ←</div>
-            <div class="dir-arrow arrow-ns">↓ ↓ ↓</div>
-            <div class="dir-arrow arrow-sn">↑ ↑ ↑</div>
 
             <div class="approach-signal sig-north-0" id="sig-north-0"></div>
             <div class="approach-signal sig-north-1" id="sig-north-1"></div>
@@ -400,9 +337,9 @@ namespace crossroads
             <div class="lane-arrow arr-ew-1">←</div>
             <div class="lane-arrow arr-ew-2">←</div>
 
+            <div class="lane-arrow turn-arrow arr-ns-t">↙</div>
             <div class="lane-arrow arr-ns-1">↓</div>
             <div class="lane-arrow arr-ns-2">↓</div>
-            <div class="lane-arrow turn-arrow arr-ns-t">↙</div>
 
             <div class="lane-arrow arr-sn-1">↑</div>
             <div class="lane-arrow arr-sn-2">↑</div>
@@ -447,7 +384,9 @@ namespace crossroads
 
         function laneProgress(v, simTime, laneLen) {
             const stopLinePx = Math.max(40, Math.floor(laneLen * 0.42));
-            const queuePx = Math.min(stopLinePx, Math.max(0, Number(v.position || 0) * 3.0));
+            // Map meters to pixels using stop-line scale so vehicles align with the drawn stop line
+            const metersToPx = stopLinePx / 70.0; // STOP_LINE_POSITION = 70m
+            const queuePx = Math.min(stopLinePx, Math.max(0, Number(v.position || 0) * metersToPx));
             if (!v.crossing) {
                 return queuePx;
             }
@@ -458,7 +397,7 @@ namespace crossroads
             const progress = Math.max(0, Math.min(1, t));
 
             if (v.turning) {
-                // Turning cars travel into intersection before curving out (smaller intersection = 70px)
+                // Turning cars travel into intersection before curving out (100px intersection)
                 return Math.min(laneLen, stopLinePx + progress * 70);
             }
 
@@ -533,18 +472,15 @@ namespace crossroads
         }
 
         function laneOffsetIndex(direction, v) {
-            // Turn lane is always on the RIGHT side of movement direction.
-            if (v.turning) {
-                if (direction === 'west') return 2;  // W->E, right is down
-                if (direction === 'east') return 0;  // E->W, right is up
-                if (direction === 'north') return 0; // N->S, right is left
-                return 2;                            // S->N, right is right
-            }
+            // Force turning vehicles into the dedicated turn lane (logical index 2)
+            if (v.turning) return 2;
+            if (typeof v.queue_index === 'number') return v.queue_index;
+            return Number(v.id) % 2; // straight lanes alternate if missing
+        }
 
-            if (direction === 'west') return Number(v.id) % 2;          // 0/1
-            if (direction === 'east') return 1 + (Number(v.id) % 2);    // 1/2
-            if (direction === 'north') return 1 + (Number(v.id) % 2);   // 1/2
-            return Number(v.id) % 2;                                     // 0/1
+        function laneOffsetsFor(direction) {
+            // Base offsets top->bottom or left->right: [inner, middle, outer]
+            return [4, 20, 36];
         }
 
         function drawLane(direction, vehicles, simTime) {
@@ -553,15 +489,29 @@ namespace crossroads
 
             const horizontal = (direction === 'west' || direction === 'east');
             const laneLen = horizontal ? Math.max(1, lane.clientWidth - 10) : Math.max(1, lane.clientHeight - 10);
-            const laneOffsets = [5, 21, 37];
+            const laneOffsets = laneOffsetsFor(direction);  // 3 lanes in 48px (each 16px wide)
 
             for (const v of vehicles) {
                 const car = document.createElement('div');
                 car.className = 'car' + (v.crossing ? ' crossing' : '') + (v.turning ? ' turning' : '');
 
-                const idx = laneOffsetIndex(direction, v);
-                const dist = Math.min(laneLen, laneProgress(v, simTime, laneLen));
-                const cprog = crossingProgress(v, simTime);
+            const idx = laneOffsetIndex(direction, v);
+            const dist = Math.min(laneLen, laneProgress(v, simTime, laneLen));
+            const cprog = crossingProgress(v, simTime);
+
+            // Place turn lane on the driver's right-hand side per direction
+            let laneOff;
+            if (v.turning) {
+                if (direction === 'east' || direction === 'north') {
+                    // Right side is top/left
+                    laneOff = laneOffsets[0];
+                } else {
+                    // Right side is bottom/right
+                    laneOff = laneOffsets[2];
+                }
+            } else {
+                laneOff = laneOffsets[Math.min(idx, laneOffsets.length - 1)];
+            }
 
                 let axis = dist;
                 if (direction === 'east' || direction === 'south') {
@@ -578,9 +528,9 @@ namespace crossroads
 
                 if (horizontal) {
                     car.style.left = `${axis + extraX}px`;
-                    car.style.top = `${laneOffsets[idx] + extraY}px`;
+                    car.style.top = `${laneOff + extraY}px`;
                 } else {
-                    car.style.left = `${laneOffsets[idx] + extraX}px`;
+                    car.style.left = `${laneOff + extraX}px`;
                     car.style.top = `${axis + extraY}px`;
                 }
 

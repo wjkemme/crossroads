@@ -57,14 +57,14 @@ crossroads/
 - Orange duration: 2 seconds (same as main lights)
 
 ## Vehicle Spacing & Speed
-
-**Implementation Details:**
-- Each vehicle has `current_speed` (0-10 m/s) and `position_in_lane` (meters).
-- Speed updates use constant acceleration: **0.5 m/s²** (prevents unrealistic instant changes).
-- Vehicle spacing: **5.0 meters** minimum between fronts (discrete queue model).
-- **No overtaking**: When a vehicle detects a blocked path (spacing < 5m), it decelerates to 0 m/s.
-- Crossing time scales with congestion: `2.0 + (density × 2.0)` seconds (2-4 sec range).
-- `updateVehicleSpeeds()` runs per tick, updating all vehicles per direction.
+**Implementation Details (current):**
+- Each vehicle tracks `current_speed` (0-10 m/s) and `position_in_lane` (meters).
+- Accel/decel capped at **3.0 m/s²**.
+- Stop target: **66 m** (4 m before the 70 m stop line); front cars clamp there on red.
+- Stopped gap: **2 m** bumper-to-bumper; minimum front-to-front spacing **6 m** (4 m car + 2 m gap).
+- Moving gap: **1.5 s** time headway + car length; gaps enforced against the nearest non-crossing vehicle (crossing cars no longer block the platoon).
+- Crossing duration scales with density: `2.5 + (density × 2.0)` seconds; turning multiplies by **1.6**.
+- `updateVehicleSpeeds()` runs per tick and maintains gaps while allowing all waiting cars to proceed on green.
 
 ## SimulatorEngine Architecture
 

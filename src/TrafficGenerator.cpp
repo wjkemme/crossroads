@@ -5,8 +5,10 @@ namespace crossroads
     namespace
     {
         constexpr double CAR_LENGTH_METERS = 4.0;
-        constexpr double MIN_FREE_GAP_METERS = CAR_LENGTH_METERS * 0.5;
-        constexpr double MIN_FRONT_DISTANCE_METERS = CAR_LENGTH_METERS + MIN_FREE_GAP_METERS;
+        constexpr double STOPLINE_TARGET_METERS = 66.0;                                      // 4m vóór de streep (streep op 70m)
+        constexpr double STOPPED_GAP_METERS = 2.0;                                           // 2m bumper-bumper bij stilstand
+        constexpr double MIN_FRONT_DISTANCE_METERS = CAR_LENGTH_METERS + STOPPED_GAP_METERS; // 6m front-to-front
+        constexpr double FOLLOWING_TIME_SECONDS = 1.5;                                       // 1.5s following bij rijden
     }
 
     TrafficGenerator::TrafficGenerator(double rate)
@@ -69,6 +71,26 @@ namespace crossroads
             {
                 Vehicle v(next_vehicle_id++, dir, current_time);
                 v.turning = (v.id % 5 == 0);
+
+                // Assign lane: turning vehicles go to lane 2, straight vehicles alternate 0/1
+                if (v.turning)
+                {
+                    v.queue_index = 2;
+                }
+                else
+                {
+                    // Use a simple counter per direction to alternate lanes
+                    // Count non-turning vehicles in this direction's queue
+                    auto &queue = getQueueByDirection(dir);
+                    size_t straight_count = 0;
+                    for (const auto &veh : queue)
+                    {
+                        if (!veh.turning)
+                            straight_count++;
+                    }
+                    v.queue_index = straight_count % 2;
+                }
+
                 auto &queue = getQueueByDirection(dir);
                 if (!queue.empty())
                 {
@@ -169,11 +191,14 @@ namespace crossroads
     void TrafficGenerator::updateVehicleSpeeds(double dt_seconds, const std::array<bool, 4> &lane_can_move)
     {
         const double STOP_LINE_POSITION = 70.0;
+        const double STOP_TARGET = STOPLINE_TARGET_METERS; // 4m voor de streep
+        const double MAX_SPEED = 10.0;                     // m/s
 
         for (int dir = 0; dir < 4; ++dir)
         {
             Direction d = static_cast<Direction>(dir);
             auto &queue = getQueueByDirection(d);
+            bool can_move = lane_can_move[dir];
 
             for (size_t i = 0; i < queue.size(); ++i)
             {
@@ -182,79 +207,79 @@ namespace crossroads
                 if (vehicle.isCrossing())
                     continue; // Already crossing, skip speed updates
 
-                double target_speed = 10.0; // Default max speed
+                double target_speed = MAX_SPEED;
 
-                // Front vehicle must stop at red light
-                if (i == 0 && !lane_can_move[dir] && vehicle.position_in_lane < STOP_LINE_POSITION)
+                // Find the nearest vehicle ahead that is not already crossing; crossing
+                // vehicles should not block the platoon behind them when the light turns green.
+                int ahead_idx = static_cast<int>(i) - 1;
+                while (ahead_idx >= 0 && queue[static_cast<size_t>(ahead_idx)].isCrossing())
                 {
-                    // Calculate braking distance needed to stop at stop line
-                    const double distance_to_stopline = STOP_LINE_POSITION - vehicle.position_in_lane;
-                    // v² = 2*a*d → v = sqrt(2*a*d), with comfortable decel of 3 m/s²
-                    const double safe_speed = std::sqrt(2.0 * 3.0 * distance_to_stopline);
-                    target_speed = std::max(0.0, std::min(target_speed, safe_speed));
+                    --ahead_idx;
                 }
+                const bool has_ahead = ahead_idx >= 0;
 
-                // Check spacing to vehicle ahead
-                if (i > 0)
+                // Desired following distance op basis van snelheid
+                // Stopped: 2m bumperafstand; moving: time-gap
+                auto getDesiredGap = [](double speed)
                 {
-                    const Vehicle &ahead = queue[i - 1];
-
-                    // If vehicle ahead is crossing, wait at stop line
-                    if (ahead.isCrossing())
+                    if (speed < 0.5)
                     {
-                        const double distance_to_stopline = STOP_LINE_POSITION - vehicle.position_in_lane;
-                        if (distance_to_stopline > 0)
-                        {
-                            const double safe_speed = std::sqrt(2.0 * 3.0 * std::max(0.1, distance_to_stopline - 2.0));
-                            target_speed = std::min(target_speed, safe_speed);
-                        }
-                        else
-                        {
-                            target_speed = 0.0;
-                        }
+                        return MIN_FRONT_DISTANCE_METERS; // 6m front-to-front (4m car + 2m gap)
                     }
-                    else
+                    // Time-based following: 1.5 sec gap + car length
+                    return CAR_LENGTH_METERS + FOLLOWING_TIME_SECONDS * speed;
+                };
+
+                // Check vehicle ahead
+                if (has_ahead)
+                {
+                    const Vehicle &ahead = queue[static_cast<size_t>(ahead_idx)];
+                    double spacing = ahead.position_in_lane - vehicle.position_in_lane;
+                    double desired_gap = getDesiredGap(vehicle.current_speed);
+
+                    // Normal car-following against the nearest non-crossing vehicle
+                    if (spacing < desired_gap)
                     {
-                        // Normal following distance
-                        double spacing = ahead.position_in_lane - vehicle.position_in_lane;
-                        if (spacing < MIN_FRONT_DISTANCE_METERS * 1.5)
-                        {
-                            target_speed = std::min(target_speed, ahead.current_speed * 0.8);
-                        }
-                        if (spacing < MIN_FRONT_DISTANCE_METERS)
-                        {
-                            target_speed = 0.0;
-                        }
+                        // Gradually slow down as we get closer
+                        double ratio = spacing / desired_gap;
+                        target_speed = std::min(target_speed, ahead.current_speed + (MAX_SPEED - ahead.current_speed) * ratio);
+                    }
+                    if (spacing < MIN_FRONT_DISTANCE_METERS)
+                    {
+                        // Emergency stop - too close
+                        target_speed = 0.0;
+                    }
+                }
+                else
+                {
+                    // Front vehicle - check stop line behavior
+                    if (!can_move && vehicle.position_in_lane < STOP_LINE_POSITION)
+                    {
+                        double dist_to_stop = STOP_TARGET - vehicle.position_in_lane;
+                        double safe_speed = std::sqrt(2.0 * 4.5 * dist_to_stop);
+                        target_speed = std::min(target_speed, safe_speed);
                     }
                 }
 
                 vehicle.updateSpeed(target_speed, dt_seconds);
 
+                // Update position
                 if (!vehicle.isCrossing())
                 {
-                    double previous_position = vehicle.position_in_lane;
                     vehicle.position_in_lane += vehicle.current_speed * dt_seconds;
 
-                    // Hard stop at stop line if light is red
-                    if (!lane_can_move[dir] && vehicle.position_in_lane >= STOP_LINE_POSITION)
+                    // Hard stop at stop line if light is red (for front vehicle)
+                    if (i == 0 && !can_move && vehicle.position_in_lane >= STOP_TARGET)
                     {
-                        vehicle.position_in_lane = STOP_LINE_POSITION;
+                        vehicle.position_in_lane = STOP_TARGET;
                         vehicle.current_speed = 0.0;
                     }
 
-                    // Maintain safe distance behind vehicle ahead
-                    if (i > 0)
+                    // Maintain minimum distance behind vehicle ahead
+                    if (has_ahead)
                     {
-                        const Vehicle &ahead = queue[i - 1];
-                        double max_pos;
-                        if (ahead.isCrossing())
-                        {
-                            max_pos = STOP_LINE_POSITION - 2.0;
-                        }
-                        else
-                        {
-                            max_pos = ahead.position_in_lane - MIN_FRONT_DISTANCE_METERS;
-                        }
+                        const Vehicle &ahead = queue[static_cast<size_t>(ahead_idx)];
+                        double max_pos = ahead.position_in_lane - MIN_FRONT_DISTANCE_METERS;
                         if (vehicle.position_in_lane > max_pos)
                         {
                             vehicle.position_in_lane = max_pos;
@@ -288,6 +313,7 @@ namespace crossroads
             state.turning = vehicle.turning;
             state.crossing_time = vehicle.crossing_time;
             state.crossing_duration = vehicle.getCrossingDuration(queue_len);
+            state.queue_index = vehicle.queue_index;
             states.push_back(state);
         }
 

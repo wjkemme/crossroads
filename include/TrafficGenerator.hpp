@@ -22,6 +22,7 @@ namespace crossroads
         bool turning = false;
         double crossing_time = -1.0;
         double crossing_duration = 0.0;
+        uint8_t queue_index = 0; // 0 or 1 for straight, 2 for turn
     };
 
     class TrafficGenerator
@@ -63,6 +64,10 @@ namespace crossroads
         double getAverageQueueDensity(Direction dir) const;
         std::vector<LaneVehicleState> getLaneVehicleStates(Direction dir) const;
 
+        // Get queue reference by direction (for direct iteration)
+        std::deque<Vehicle> &getQueueByDirection(Direction dir);
+        const std::deque<Vehicle> &getQueueByDirection(Direction dir) const;
+
     private:
         double arrival_rate;      // vehicles per second per lane
         double time_accumulated;  // accumulated time for next spawn calculation
@@ -76,10 +81,6 @@ namespace crossroads
 
         // Vehicles that have completed crossing
         std::vector<Vehicle> crossed_vehicles;
-
-        // Helper to get queue reference by direction
-        std::deque<Vehicle> &getQueueByDirection(Direction dir);
-        const std::deque<Vehicle> &getQueueByDirection(Direction dir) const;
 
         // Helper to calculate next spawn time using Poisson-like distribution
         double getNextSpawnInterval();

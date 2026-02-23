@@ -23,11 +23,12 @@ namespace crossroads
         double current_speed;    // m/s, range [0, 10]
         double position_in_lane; // meters from queue start
         bool turning;            // true when vehicle uses turn lane
+        uint8_t queue_index;     // 0 or 1 for straight lanes, 2 for turn lane
 
         Vehicle(uint32_t vid, Direction lane, double arrival)
             : id(vid), entry_lane(lane), arrival_time(arrival),
               crossing_time(-1.0), exit_time(-1.0),
-              current_speed(0.0), position_in_lane(0.0), turning(false) {}
+              current_speed(0.0), position_in_lane(0.0), turning(false), queue_index(0) {}
 
         bool isWaiting() const { return crossing_time < 0.0; }
         bool isCrossing() const { return crossing_time >= 0.0 && exit_time < 0.0; }
@@ -49,7 +50,7 @@ namespace crossroads
 
         void updateSpeed(double target_speed, double dt_seconds)
         {
-            const double ACCEL = 0.5; // m/s²
+            const double ACCEL = 3.0; // m/s² - realistic car acceleration
             target_speed = std::max(0.0, std::min(10.0, target_speed));
 
             double delta = target_speed - current_speed;
