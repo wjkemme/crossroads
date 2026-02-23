@@ -5,7 +5,7 @@ namespace crossroads
     namespace
     {
         constexpr double CAR_LENGTH_METERS = 4.0;
-        constexpr double STOPLINE_TARGET_METERS = 66.0;                                      // 4m vóór de streep (streep op 70m)
+        constexpr double STOPLINE_TARGET_METERS = 69.0;                                      // 1m vóór de streep (streep op 70m)
         constexpr double STOPPED_GAP_METERS = 2.0;                                           // 2m bumper-bumper bij stilstand
         constexpr double MIN_FRONT_DISTANCE_METERS = CAR_LENGTH_METERS + STOPPED_GAP_METERS; // 6m front-to-front
         constexpr double FOLLOWING_TIME_SECONDS = 1.5;                                       // 1.5s following bij rijden

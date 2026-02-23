@@ -115,10 +115,10 @@ namespace crossroads
         /* Uitvoeg/invoeg CSS no longer needed - integrated into 48px lanes */
 
         .stop-line { position: absolute; background: #f8fafc; opacity: 0.95; z-index: 5; }
-        .stop-line.west-east { left: calc(50% - 52px); top: 50%; width: 3px; height: 48px; }
-        .stop-line.east-west { left: calc(50% + 50px); top: calc(50% - 48px); width: 3px; height: 48px; }
-        .stop-line.north-south { left: calc(50% - 48px); top: calc(50% - 52px); width: 48px; height: 3px; }
-        .stop-line.south-north { left: 50%; top: calc(50% + 50px); width: 48px; height: 3px; }
+        .stop-line.west-east { left: calc(50% - 72px); top: 50%; width: 3px; height: 48px; }
+        .stop-line.east-west { left: calc(50% + 70px); top: calc(50% - 48px); width: 3px; height: 48px; }
+        .stop-line.north-south { left: calc(50% - 48px); top: calc(50% - 72px); width: 48px; height: 3px; }
+        .stop-line.south-north { left: 50%; top: calc(50% + 70px); width: 48px; height: 3px; }
 
         /* No turn-cut needed anymore - slip roads are separate */
 
@@ -163,21 +163,21 @@ namespace crossroads
             box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9), 0 0 8px rgba(239, 68, 68, 0.65);
         }
         /* 3 signals per direction (2 straight + 1 turn) */
-        .sig-north-0 { left: calc(50% - 44px); top: calc(50% - 68px); }
-        .sig-north-1 { left: calc(50% - 28px); top: calc(50% - 68px); }
-        .sig-north-2 { left: calc(50% - 12px); top: calc(50% - 68px); }
+        .sig-north-0 { left: calc(50% - 48px); top: calc(50% - 68px); }
+        .sig-north-1 { left: calc(50% - 32px); top: calc(50% - 68px); }
+        .sig-north-2 { left: calc(50% - 16px); top: calc(50% - 68px); }
 
-        .sig-south-0 { left: calc(50% + 8px); top: calc(50% + 56px); }
-        .sig-south-1 { left: calc(50% + 24px); top: calc(50% + 56px); }
-        .sig-south-2 { left: calc(50% + 40px); top: calc(50% + 56px); }
+        .sig-south-0 { left: calc(50% + 4px);  top: calc(50% + 56px); }
+        .sig-south-1 { left: calc(50% + 20px); top: calc(50% + 56px); }
+        .sig-south-2 { left: calc(50% + 36px); top: calc(50% + 56px); }
 
-        .sig-west-0  { left: calc(50% - 68px); top: calc(50% + 8px); }
-        .sig-west-1  { left: calc(50% - 68px); top: calc(50% + 24px); }
-        .sig-west-2  { left: calc(50% - 68px); top: calc(50% + 40px); }
+        .sig-west-0  { left: calc(50% - 68px); top: calc(50% + 4px); }
+        .sig-west-1  { left: calc(50% - 68px); top: calc(50% + 20px); }
+        .sig-west-2  { left: calc(50% - 68px); top: calc(50% + 36px); }
 
-        .sig-east-0  { left: calc(50% + 56px); top: calc(50% - 44px); }
-        .sig-east-1  { left: calc(50% + 56px); top: calc(50% - 28px); }
-        .sig-east-2  { left: calc(50% + 56px); top: calc(50% - 12px); }
+        .sig-east-0  { left: calc(50% + 56px); top: calc(50% - 48px); }
+        .sig-east-1  { left: calc(50% + 56px); top: calc(50% - 32px); }
+        .sig-east-2  { left: calc(50% + 56px); top: calc(50% - 16px); }
 
         .lane::before, .lane::after {
             content: "";
@@ -383,7 +383,8 @@ namespace crossroads
         }
 
         function laneProgress(v, simTime, laneLen) {
-            const stopLinePx = Math.max(40, Math.floor(laneLen * 0.42));
+            // Stoplijn iets dichter bij de kruising (voor de lichten)
+            const stopLinePx = Math.max(40, Math.floor(laneLen * 0.33));
             // Map meters to pixels using stop-line scale so vehicles align with the drawn stop line
             const metersToPx = stopLinePx / 70.0; // STOP_LINE_POSITION = 70m
             const queuePx = Math.min(stopLinePx, Math.max(0, Number(v.position || 0) * metersToPx));
@@ -529,7 +530,7 @@ namespace crossroads
                                 (direction === 'east') ? 'north' : 'west';
                 drawHorizontal = (destDir === 'west' || destDir === 'east');
                 const destLaneLen = drawHorizontal ? Math.max(1, lane.clientWidth - 10) : Math.max(1, lane.clientHeight - 10);
-                const destStop = Math.max(40, Math.floor(destLaneLen * 0.42));
+                const destStop = Math.max(40, Math.floor(destLaneLen * 0.33));
                 perp = laneOffset(destDir, 1, false); // outer straight lane of destination
 
                 // Move lineair vanaf de stoplijn van de doelrichting naar het einde van die rijstrook
