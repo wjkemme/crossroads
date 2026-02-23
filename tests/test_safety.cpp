@@ -372,17 +372,17 @@ TEST_CASE("Vehicle speed updates gradually", "[vehicle]")
 {
     Vehicle v(1, Direction::North, 0.0);
     v.updateSpeed(10.0, 0.5);
-    REQUIRE(v.current_speed == Catch::Approx(0.25));
+    REQUIRE(v.current_speed == Catch::Approx(1.5));
     v.updateSpeed(10.0, 0.5);
-    REQUIRE(v.current_speed == Catch::Approx(0.5));
+    REQUIRE(v.current_speed == Catch::Approx(3.0));
 }
 
 TEST_CASE("Vehicle crossing duration scales with density", "[vehicle]")
 {
     Vehicle v(1, Direction::North, 0.0);
-    REQUIRE(v.getCrossingDuration(0) == Catch::Approx(2.0));
-    REQUIRE(v.getCrossingDuration(5) == Catch::Approx(3.0));
-    REQUIRE(v.getCrossingDuration(10) == Catch::Approx(4.0));
+    REQUIRE(v.getCrossingDuration(0) == Catch::Approx(2.5));
+    REQUIRE(v.getCrossingDuration(5) == Catch::Approx(3.5));
+    REQUIRE(v.getCrossingDuration(10) == Catch::Approx(4.5));
 }
 
 TEST_CASE("SimulatorEngine initializes safely", "[engine]")

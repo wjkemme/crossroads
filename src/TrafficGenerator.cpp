@@ -193,6 +193,7 @@ namespace crossroads
         const double STOP_LINE_POSITION = 70.0;
         const double STOP_TARGET = STOPLINE_TARGET_METERS; // 4m voor de streep
         const double MAX_SPEED = 10.0;                     // m/s
+        const double BRAKE_DECEL = 4.5;                    // m/s^2
 
         for (int dir = 0; dir < 4; ++dir)
         {
@@ -209,55 +210,84 @@ namespace crossroads
 
                 double target_speed = MAX_SPEED;
 
-                // Find the nearest vehicle ahead that is not already crossing; crossing
-                // vehicles should not block the platoon behind them when the light turns green.
+                // Nearest non-crossing vehicle ahead in the SAME lane (queue_index)
                 int ahead_idx = static_cast<int>(i) - 1;
-                while (ahead_idx >= 0 && queue[static_cast<size_t>(ahead_idx)].isCrossing())
+                while (ahead_idx >= 0)
                 {
+                    const Vehicle &ahead = queue[static_cast<size_t>(ahead_idx)];
+                    if (!ahead.isCrossing() && ahead.queue_index == vehicle.queue_index)
+                        break;
                     --ahead_idx;
                 }
                 const bool has_ahead = ahead_idx >= 0;
 
-                // Desired following distance op basis van snelheid
-                // Stopped: 2m bumperafstand; moving: time-gap
+                // Desired following distance: stopped 2m gap; moving time-gap
                 auto getDesiredGap = [](double speed)
                 {
                     if (speed < 0.5)
                     {
                         return MIN_FRONT_DISTANCE_METERS; // 6m front-to-front (4m car + 2m gap)
                     }
-                    // Time-based following: 1.5 sec gap + car length
                     return CAR_LENGTH_METERS + FOLLOWING_TIME_SECONDS * speed;
                 };
 
-                // Check vehicle ahead
+                // Compute target position respecting stop target and front vehicle in same lane
+                double target_position = STOP_TARGET;
+                if (has_ahead)
+                {
+                    const Vehicle &ahead = queue[static_cast<size_t>(ahead_idx)];
+                    target_position = std::min(target_position, ahead.position_in_lane - MIN_FRONT_DISTANCE_METERS);
+                }
+
                 if (has_ahead)
                 {
                     const Vehicle &ahead = queue[static_cast<size_t>(ahead_idx)];
                     double spacing = ahead.position_in_lane - vehicle.position_in_lane;
                     double desired_gap = getDesiredGap(vehicle.current_speed);
 
-                    // Normal car-following against the nearest non-crossing vehicle
-                    if (spacing < desired_gap)
+                    if (can_move)
                     {
-                        // Gradually slow down as we get closer
-                        double ratio = spacing / desired_gap;
-                        target_speed = std::min(target_speed, ahead.current_speed + (MAX_SPEED - ahead.current_speed) * ratio);
+                        // Time-gap following
+                        if (spacing < desired_gap)
+                        {
+                            double ratio = spacing / desired_gap;
+                            target_speed = std::min(target_speed, ahead.current_speed + (MAX_SPEED - ahead.current_speed) * ratio);
+                        }
+                        if (spacing < MIN_FRONT_DISTANCE_METERS)
+                        {
+                            target_speed = 0.0;
+                        }
                     }
-                    if (spacing < MIN_FRONT_DISTANCE_METERS)
+                    else
                     {
-                        // Emergency stop - too close
-                        target_speed = 0.0;
+                        // Red/orange: brake to stop target (or behind front car)
+                        double dist_to_target = target_position - vehicle.position_in_lane;
+                        if (dist_to_target <= 0.0)
+                        {
+                            target_speed = 0.0;
+                        }
+                        else
+                        {
+                            double safe_speed = std::sqrt(2.0 * BRAKE_DECEL * dist_to_target);
+                            target_speed = std::min(target_speed, safe_speed);
+                        }
                     }
                 }
                 else
                 {
-                    // Front vehicle - check stop line behavior
+                    // No vehicle ahead
                     if (!can_move && vehicle.position_in_lane < STOP_LINE_POSITION)
                     {
                         double dist_to_stop = STOP_TARGET - vehicle.position_in_lane;
-                        double safe_speed = std::sqrt(2.0 * 4.5 * dist_to_stop);
-                        target_speed = std::min(target_speed, safe_speed);
+                        if (dist_to_stop <= 0.0)
+                        {
+                            target_speed = 0.0;
+                        }
+                        else
+                        {
+                            double safe_speed = std::sqrt(2.0 * BRAKE_DECEL * dist_to_stop);
+                            target_speed = std::min(target_speed, safe_speed);
+                        }
                     }
                 }
 
@@ -268,11 +298,14 @@ namespace crossroads
                 {
                     vehicle.position_in_lane += vehicle.current_speed * dt_seconds;
 
-                    // Hard stop at stop line if light is red (for front vehicle)
-                    if (i == 0 && !can_move && vehicle.position_in_lane >= STOP_TARGET)
+                    // Clamp to stop target if red/orange
+                    if (!can_move)
                     {
-                        vehicle.position_in_lane = STOP_TARGET;
-                        vehicle.current_speed = 0.0;
+                        if (vehicle.position_in_lane > target_position)
+                        {
+                            vehicle.position_in_lane = target_position;
+                            vehicle.current_speed = 0.0;
+                        }
                     }
 
                     // Maintain minimum distance behind vehicle ahead

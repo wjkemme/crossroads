@@ -478,9 +478,20 @@ namespace crossroads
             return Number(v.id) % 2; // straight lanes alternate if missing
         }
 
-        function laneOffsetsFor(direction) {
-            // Base offsets top->bottom or left->right: [inner, middle, outer]
-            return [4, 20, 36];
+        function laneOffset(direction, laneIndex, turning) {
+            // Offsets per direction so the turn lane is op de rechterkant van de rijrichting
+            // West->East, South->North: right side is bottom/right
+            // East->West, North->South: right side is top/left
+            if (direction === 'east' || direction === 'north') {
+                // Top/left = right-hand side for these directions: turn lane first
+                if (turning) return 4;        // turn lane buitenkant
+                if (laneIndex === 0) return 20; // straight inner
+                return 36;                     // straight outer
+            }
+            // Default: right-hand side is bottom/right
+            if (turning) return 36;            // turn lane buitenkant
+            if (laneIndex === 0) return 4;     // straight inner
+            return 20;                         // straight outer
         }
 
         function drawLane(direction, vehicles, simTime) {
@@ -489,7 +500,7 @@ namespace crossroads
 
             const horizontal = (direction === 'west' || direction === 'east');
             const laneLen = horizontal ? Math.max(1, lane.clientWidth - 10) : Math.max(1, lane.clientHeight - 10);
-            const laneOffsets = laneOffsetsFor(direction);  // 3 lanes in 48px (each 16px wide)
+            // 3 lanes in 48px (each 16px wide) handled via laneOffset()
 
             for (const v of vehicles) {
                 const car = document.createElement('div');
@@ -499,51 +510,54 @@ namespace crossroads
             const dist = Math.min(laneLen, laneProgress(v, simTime, laneLen));
             const cprog = crossingProgress(v, simTime);
 
-            // Place turn lane on the driver's right-hand side per direction
-            let laneOff;
-            if (v.turning) {
-                if (direction === 'east' || direction === 'north') {
-                    // Right side is top/left
-                    laneOff = laneOffsets[0];
-                } else {
-                    // Right side is bottom/right
-                    laneOff = laneOffsets[2];
+            // Default lane offset (perp axis) for current direction/lane
+            let laneOff = laneOffset(direction, idx, v.turning);
+
+            let drawHorizontal = horizontal;
+            let axis = dist;
+            let perp = laneOff;
+            let headingBase = 0;
+            if (direction === 'west') headingBase = 0;      // W -> E
+            if (direction === 'east') headingBase = 180;    // E -> W
+            if (direction === 'north') headingBase = 90;    // N -> S
+            if (direction === 'south') headingBase = -90;   // S -> N
+
+            if (v.turning && v.crossing) {
+                // Hard snap to destination leg, outer straight lane (rightmost of target direction)
+                const destDir = (direction === 'west') ? 'south' :
+                                (direction === 'south') ? 'east' :
+                                (direction === 'east') ? 'north' : 'west';
+                drawHorizontal = (destDir === 'west' || destDir === 'east');
+                const destLaneLen = drawHorizontal ? Math.max(1, lane.clientWidth - 10) : Math.max(1, lane.clientHeight - 10);
+                const destStop = Math.max(40, Math.floor(destLaneLen * 0.42));
+                perp = laneOffset(destDir, 1, false); // outer straight lane of destination
+
+                // Move lineair vanaf de stoplijn van de doelrichting naar het einde van die rijstrook
+                axis = destStop + cprog * (destLaneLen - destStop);
+                if (destDir === 'east' || destDir === 'south') {
+                    axis = destLaneLen - axis;
                 }
-            } else {
-                laneOff = laneOffsets[Math.min(idx, laneOffsets.length - 1)];
+
+                headingBase = 0;
+                if (destDir === 'west') headingBase = 0;
+                if (destDir === 'east') headingBase = 180;
+                if (destDir === 'north') headingBase = 90;
+                if (destDir === 'south') headingBase = -90;
             }
 
-                let axis = dist;
-                if (direction === 'east' || direction === 'south') {
-                    axis = laneLen - dist;
-                }
+            if (direction === 'east' || direction === 'south') {
+                axis = laneLen - axis;
+            }
 
-                let extraX = 0;
-                let extraY = 0;
-                if (v.turning && v.crossing) {
-                    const curve = turnCurveShift(direction, cprog);
-                    extraX = curve.x;
-                    extraY = curve.y;
-                }
+            if (drawHorizontal) {
+                car.style.left = `${axis}px`;
+                car.style.top = `${perp}px`;
+            } else {
+                car.style.left = `${perp}px`;
+                car.style.top = `${axis}px`;
+            }
 
-                if (horizontal) {
-                    car.style.left = `${axis + extraX}px`;
-                    car.style.top = `${laneOff + extraY}px`;
-                } else {
-                    car.style.left = `${laneOff + extraX}px`;
-                    car.style.top = `${axis + extraY}px`;
-                }
-
-                let baseAngle = 0;
-                if (direction === 'west') baseAngle = 0;      // W -> E
-                if (direction === 'east') baseAngle = 180;    // E -> W
-                if (direction === 'north') baseAngle = 90;    // N -> S
-                if (direction === 'south') baseAngle = -90;   // S -> N
-
-                let heading = baseAngle;
-                if (v.turning && v.crossing) {
-                    heading = baseAngle + (90 * cprog);
-                }
+            let heading = headingBase;
 
                 car.style.transformOrigin = 'center center';
                 car.style.transform = `rotate(${heading}deg)`;
