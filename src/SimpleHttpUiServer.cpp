@@ -64,12 +64,6 @@ namespace crossroads
         button:hover { background: #1d4ed8; }
         .small { font-size: 12px; color: #9ca3af; }
 
-        .light { width: 18px; height: 18px; border-radius: 999px; border: 2px solid #9ca3af; margin-left: 8px; display: inline-block; vertical-align: middle; }
-        .red { background: #ef4444; }
-        .orange { background: #f59e0b; }
-        .green { background: #22c55e; }
-        .off { background: #374151; }
-
         .road-wrap {
             margin-top: 14px;
             position: relative;
@@ -275,7 +269,6 @@ namespace crossroads
             100% { opacity: 1; }
         }
 
-        .lights-overlay { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
     </style>
 </head>
 <body>
@@ -351,24 +344,9 @@ namespace crossroads
             <div class="lane-label lbl-sn">South→North (2x straight + 1x turn)</div>
         </div>
 
-        <div class="lights-overlay">
-            <div class="card">North <span class="light off" id="north"></span></div>
-            <div class="card">East <span class="light off" id="east"></span></div>
-            <div class="card">South <span class="light off" id="south"></span></div>
-            <div class="card">West <span class="light off" id="west"></span></div>
-            <div class="card">Turn S→E <span class="light off" id="turnSouthEast"></span></div>
-            <div class="card">Turn N→W <span class="light off" id="turnNorthWest"></span></div>
-            <div class="card">Turn W→S <span class="light off" id="turnWestSouth"></span></div>
-            <div class="card">Turn E→N <span class="light off" id="turnEastNorth"></span></div>
-        </div>
     </div>
 
     <script>
-        function setLight(id, value) {
-            const el = document.getElementById(id);
-            el.className = 'light ' + (value || 'off');
-        }
-
         function setLaneSignal(id, value) {
             const el = document.getElementById(id);
             if (!el) return;
@@ -601,20 +579,12 @@ namespace crossroads
             document.getElementById('qtotal').textContent = total;
             document.getElementById('qnesw').textContent = `${q.north}/${q.east}/${q.south}/${q.west}`;
 
-            setLight('north', s.lights.north);
-            setLight('east', s.lights.east);
-            setLight('south', s.lights.south);
-            setLight('west', s.lights.west);
             ['0', '1', '2'].forEach(i => {
                 setLaneSignal(`sig-north-${i}`, s.lights.north);
                 setLaneSignal(`sig-east-${i}`, s.lights.east);
                 setLaneSignal(`sig-south-${i}`, s.lights.south);
                 setLaneSignal(`sig-west-${i}`, s.lights.west);
             });
-            setLight('turnSouthEast', s.lights.turnSouthEast);
-            setLight('turnNorthWest', s.lights.turnNorthWest);
-            setLight('turnWestSouth', s.lights.turnWestSouth);
-            setLight('turnEastNorth', s.lights.turnEastNorth);
 
             drawLane('west', s.lanes.west || [], s.sim_time);
             drawLane('east', s.lanes.east || [], s.sim_time);
