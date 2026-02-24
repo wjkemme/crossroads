@@ -5,7 +5,7 @@ namespace crossroads
     namespace
     {
         constexpr double CAR_LENGTH_METERS = 4.0;
-        constexpr double STOPLINE_TARGET_METERS = 69.0;                                      // 1m vóór de streep (streep op 70m)
+        constexpr double STOPLINE_TARGET_METERS = 69.5;                                      // 0.5m vóór de streep (streep op 70m)
         constexpr double STOPPED_GAP_METERS = 2.0;                                           // 2m bumper-bumper bij stilstand
         constexpr double MIN_FRONT_DISTANCE_METERS = CAR_LENGTH_METERS + STOPPED_GAP_METERS; // 6m front-to-front
         constexpr double FOLLOWING_TIME_SECONDS = 1.5;                                       // 1.5s following bij rijden
@@ -191,7 +191,7 @@ namespace crossroads
     void TrafficGenerator::updateVehicleSpeeds(double dt_seconds, const std::array<bool, 4> &lane_can_move)
     {
         const double STOP_LINE_POSITION = 70.0;
-        const double STOP_TARGET = STOPLINE_TARGET_METERS; // 4m voor de streep
+        const double STOP_TARGET = STOPLINE_TARGET_METERS; // 0.5m voor de streep
         const double MAX_SPEED = 10.0;                     // m/s
         const double BRAKE_DECEL = 4.5;                    // m/s^2
 

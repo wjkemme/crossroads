@@ -65,7 +65,7 @@ namespace crossroads
     void SimulatorEngine::processVehicleCrossings()
     {
         // Start crossing for ALL vehicles that have reached de stopzone (4m voor streep)
-        const double STOP_TARGET = 69.0;
+        const double STOP_TARGET = 69.5;
 
         for (int dir = 0; dir < 4; ++dir)
         {

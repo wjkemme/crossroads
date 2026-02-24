@@ -4,6 +4,7 @@
 - **Project Name**: Crossroads
 - **Language**: C++
 - **Code standard**: clean code (Robert C. Martin)
+- **Complexity**: Medium to low complexity, with a focus on modular design and maintainability
 - **Build System**: cmake
 - **Database**: ORM: sqlite_orm
 - **Purpose**:

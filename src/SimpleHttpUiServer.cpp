@@ -382,12 +382,23 @@ namespace crossroads
             el.className = parts.join(' ');
         }
 
-        function laneProgress(v, simTime, laneLen) {
-            // Stoplijn iets dichter bij de kruising (voor de lichten)
-            const stopLinePx = Math.max(40, Math.floor(laneLen * 0.33));
-            // Map meters to pixels using stop-line scale so vehicles align with the drawn stop line
-            const metersToPx = stopLinePx / 70.0; // STOP_LINE_POSITION = 70m
-            const queuePx = Math.min(stopLinePx, Math.max(0, Number(v.position || 0) * metersToPx));
+        function stopLinePx(direction, laneLen) {
+            // Align pixel stoplijn per richting vóór de kruising (incoming side)
+            const mid = laneLen * 0.5;
+            const off = 60; // afstand vanaf het midden naar de stoplijn
+            switch (direction) {
+                case 'west':  return mid - off; // W->E: voor het midden
+                case 'east':  return mid - off; // E->W: spiegel, axis wordt later omgedraaid
+                case 'north': return mid - off; // N->S: boven het midden
+                case 'south': return mid - off; // S->N: spiegel, axis wordt later omgedraaid
+                default:      return Math.max(40, Math.floor(laneLen * 0.33));
+            }
+        }
+
+        function laneProgress(v, simTime, laneLen, direction) {
+            const stopPx = stopLinePx(direction, laneLen);
+            const metersToPx = stopPx / 70.0; // STOP_LINE_POSITION = 70m
+            const queuePx = Math.min(stopPx, Math.max(0, Number(v.position || 0) * metersToPx));
             if (!v.crossing) {
                 return queuePx;
             }
@@ -399,11 +410,11 @@ namespace crossroads
 
             if (v.turning) {
                 // Turning cars travel into intersection before curving out (100px intersection)
-                return Math.min(laneLen, stopLinePx + progress * 70);
+                return Math.min(laneLen, stopPx + progress * 70);
             }
 
             // Straight-through cars traverse full remaining lane length
-            return Math.min(laneLen, stopLinePx + progress * (laneLen - stopLinePx));
+            return Math.min(laneLen, stopPx + progress * (laneLen - stopPx));
         }
 
         function crossingProgress(v, simTime) {
@@ -508,7 +519,7 @@ namespace crossroads
                 car.className = 'car' + (v.crossing ? ' crossing' : '') + (v.turning ? ' turning' : '');
 
             const idx = laneOffsetIndex(direction, v);
-            const dist = Math.min(laneLen, laneProgress(v, simTime, laneLen));
+            const dist = Math.min(laneLen, laneProgress(v, simTime, laneLen, direction));
             const cprog = crossingProgress(v, simTime);
 
             // Default lane offset (perp axis) for current direction/lane
@@ -530,7 +541,7 @@ namespace crossroads
                                 (direction === 'east') ? 'north' : 'west';
                 drawHorizontal = (destDir === 'west' || destDir === 'east');
                 const destLaneLen = drawHorizontal ? Math.max(1, lane.clientWidth - 10) : Math.max(1, lane.clientHeight - 10);
-                const destStop = Math.max(40, Math.floor(destLaneLen * 0.33));
+                const destStop = stopLinePx(destDir, destLaneLen);
                 perp = laneOffset(destDir, 1, false); // outer straight lane of destination
 
                 // Move lineair vanaf de stoplijn van de doelrichting naar het einde van die rijstrook
