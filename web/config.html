@@ -1,0 +1,1257 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crossroads Config</title>
+        <link rel="stylesheet" href="/assets/config.css" />
+
+</head>
+<body>
+    <div class="wrap">
+        <h1>Intersection Config</h1>
+        <div class="row">
+            <button id="btnLoad" onclick="loadConfig()">Load</button>
+            <button id="btnSave" onclick="saveConfig()">Save (pending)</button>
+            <button id="btnApply" class="secondary" onclick="applyConfig()">Apply via reset</button>
+            <button id="btnStart" class="secondary" onclick="startSim()">Start</button>
+            <a href="/">Back to simulator</a>
+            <span id="runState" class="small">sim state: unknown</span>
+        </div>
+
+        <div class="card">
+            <div class="graph-wrap">
+                <div class="graph-title">Graphical intersection editor</div>
+                <div class="small">Lane indexing: 0 = inner lane, higher index = outward.</div>
+                <div id="graphBoard" class="graph-board"></div>
+            </div>
+            <div class="route-wrap">
+                <div class="graph-title">Configured routes through intersection</div>
+                <svg id="routeMap" class="route-map" viewBox="0 0 640 360" role="img" aria-label="Configured route schematic"></svg>
+            </div>
+            <div id="approaches" class="grid"></div>
+            <div id="status" class="status">Ready</div>
+            <div id="banner" class="banner"></div>
+            <ul id="errors" class="errors"></ul>
+        </div>
+    </div>
+
+    <script>
+        const APPROACH_ORDER = ['north', 'east', 'south', 'west'];
+        const MOVEMENTS = ['left', 'straight', 'right'];
+
+        const approachesEl = document.getElementById('approaches');
+        const graphBoardEl = document.getElementById('graphBoard');
+        const routeMapEl = document.getElementById('routeMap');
+        const statusEl = document.getElementById('status');
+        const bannerEl = document.getElementById('banner');
+        const errorsEl = document.getElementById('errors');
+        const runStateEl = document.getElementById('runState');
+        const btnLoadEl = document.getElementById('btnLoad');
+        const btnSaveEl = document.getElementById('btnSave');
+        const btnApplyEl = document.getElementById('btnApply');
+        const btnStartEl = document.getElementById('btnStart');
+
+        let state = {
+            approaches: [],
+            signal_groups: [],
+            lane_connections: []
+        };
+
+        function labelForApproach(id) {
+            const value = String(id || '').toLowerCase();
+            if (value === 'north') return 'N';
+            if (value === 'east') return 'E';
+            if (value === 'south') return 'S';
+            if (value === 'west') return 'W';
+            return 'X';
+        }
+
+        function laneCode(approachId, laneIndex) {
+            return `${labelForApproach(approachId)}-${laneIndex}`;
+        }
+
+        function approachWord(id) {
+            const value = String(id || '').toLowerCase();
+            if (value === 'north') return 'North';
+            if (value === 'east') return 'East';
+            if (value === 'south') return 'South';
+            if (value === 'west') return 'West';
+            return 'Unknown';
+        }
+
+        function fromLabel(id) {
+            return `From the ${approachWord(id)}`;
+        }
+
+        function toLabel(id) {
+            return `To the ${approachWord(id)}`;
+        }
+
+        function defaultLane(approachId, laneIndex) {
+            return {
+                name: laneCode(approachId, laneIndex),
+                supports_lane_change: false,
+                connected_to_intersection: true,
+                has_traffic_light: true,
+                allowed_movements: ['straight']
+            };
+        }
+
+        function defaultApproach(id) {
+            return {
+                id,
+                name: id.charAt(0).toUpperCase() + id.slice(1),
+                lanes: [defaultLane(id, 0)],
+                to_lane_count: 1
+            };
+        }
+
+        function toLaneCountForApproach(approach) {
+            const raw = Number(approach && approach.to_lane_count);
+            if (Number.isFinite(raw) && raw > 0) {
+                return Math.max(1, Math.min(64, Math.floor(raw)));
+            }
+            const fallback = approach && Array.isArray(approach.lanes) ? approach.lanes.length : 1;
+            return Math.max(1, fallback);
+        }
+
+        function destinationApproachFor(fromApproach, movement) {
+            const from = String(fromApproach || '').toLowerCase();
+            if (from === 'north') {
+                if (movement === 'straight') return 'south';
+                if (movement === 'left') return 'east';
+                return 'west';
+            }
+            if (from === 'east') {
+                if (movement === 'straight') return 'west';
+                if (movement === 'left') return 'south';
+                return 'north';
+            }
+            if (from === 'south') {
+                if (movement === 'straight') return 'north';
+                if (movement === 'left') return 'west';
+                return 'east';
+            }
+            if (from === 'west') {
+                if (movement === 'straight') return 'east';
+                if (movement === 'left') return 'north';
+                return 'south';
+            }
+            return 'north';
+        }
+
+        function approachById(approachId) {
+            return state.approaches.find((entry) => entry.id === approachId) || null;
+        }
+
+        function connectionKey(fromApproach, fromLaneIndex, movement) {
+            return `${fromApproach}:${fromLaneIndex}:${movement}`;
+        }
+
+        function getConnection(fromApproach, fromLaneIndex, movement) {
+            return state.lane_connections.find((connection) =>
+                connection.from_approach === fromApproach &&
+                Number(connection.from_lane_index) === Number(fromLaneIndex) &&
+                connection.movement === movement
+            ) || null;
+        }
+
+        function setConnection(fromApproach, fromLaneIndex, movement, toApproach, toLaneIndex) {
+            const existing = getConnection(fromApproach, fromLaneIndex, movement);
+            if (existing) {
+                existing.to_approach = toApproach;
+                existing.to_lane_index = toLaneIndex;
+                return;
+            }
+            state.lane_connections.push({
+                from_approach: fromApproach,
+                from_lane_index: fromLaneIndex,
+                movement,
+                to_approach: toApproach,
+                to_lane_index: toLaneIndex
+            });
+        }
+
+        function normalizeConnections() {
+            const validKeys = new Set();
+            const normalized = [];
+
+            for (const approach of state.approaches) {
+                for (let laneIdx = 0; laneIdx < approach.lanes.length; laneIdx++) {
+                    const lane = approach.lanes[laneIdx];
+                    for (const movement of lane.allowed_movements || []) {
+                        const key = connectionKey(approach.id, laneIdx, movement);
+                        validKeys.add(key);
+                    }
+                }
+            }
+
+            for (const connection of state.lane_connections || []) {
+                const key = connectionKey(connection.from_approach, connection.from_lane_index, connection.movement);
+                if (!validKeys.has(key)) {
+                    continue;
+                }
+                const targetApproach = approachById(connection.to_approach) || approachById(destinationApproachFor(connection.from_approach, connection.movement));
+                if (!targetApproach) {
+                    continue;
+                }
+                const maxLane = Math.max(0, toLaneCountForApproach(targetApproach) - 1);
+                const laneIndex = Math.max(0, Math.min(maxLane, Number(connection.to_lane_index) || 0));
+                normalized.push({
+                    from_approach: connection.from_approach,
+                    from_lane_index: Number(connection.from_lane_index),
+                    movement: connection.movement,
+                    to_approach: targetApproach.id,
+                    to_lane_index: laneIndex
+                });
+            }
+
+            for (const approach of state.approaches) {
+                for (let laneIdx = 0; laneIdx < approach.lanes.length; laneIdx++) {
+                    const lane = approach.lanes[laneIdx];
+                    for (const movement of lane.allowed_movements || []) {
+                        if (normalized.find((entry) => entry.from_approach === approach.id && entry.from_lane_index === laneIdx && entry.movement === movement)) {
+                            continue;
+                        }
+                        const destApproachId = destinationApproachFor(approach.id, movement);
+                        const destApproach = approachById(destApproachId);
+                        const maxLane = destApproach ? Math.max(0, toLaneCountForApproach(destApproach) - 1) : 0;
+                        const targetLane = Math.min(laneIdx, maxLane);
+                        normalized.push({
+                            from_approach: approach.id,
+                            from_lane_index: laneIdx,
+                            movement,
+                            to_approach: destApproachId,
+                            to_lane_index: targetLane
+                        });
+                    }
+                }
+            }
+
+            state.lane_connections = normalized;
+        }
+
+        function clearErrors() {
+            errorsEl.innerHTML = '';
+        }
+
+        function setErrors(errors) {
+            clearErrors();
+            if (!Array.isArray(errors) || errors.length === 0) {
+                return;
+            }
+            for (const err of errors) {
+                const li = document.createElement('li');
+                li.textContent = String(err);
+                errorsEl.appendChild(li);
+            }
+        }
+
+        function setBanner(msg, kind) {
+            bannerEl.textContent = msg;
+            bannerEl.className = 'banner ' + (kind || '');
+        }
+
+        function setStatus(msg, kind) {
+            statusEl.textContent = msg;
+            statusEl.className = 'status ' + (kind || '');
+        }
+
+        function tryParseResponseBody(text) {
+            try {
+                return JSON.parse(text);
+            } catch {
+                return null;
+            }
+        }
+
+        function normalizeLane(raw, approachId, laneIndex) {
+            const name = raw && typeof raw.name === 'string' ? raw.name : laneCode(approachId, laneIndex);
+            const supports = !!(raw && raw.supports_lane_change);
+            const connected = raw && Object.prototype.hasOwnProperty.call(raw, 'connected_to_intersection')
+                ? !!raw.connected_to_intersection
+                : true;
+            const hasTrafficLight = raw && Object.prototype.hasOwnProperty.call(raw, 'has_traffic_light')
+                ? !!raw.has_traffic_light
+                : true;
+            const incomingMoves = raw && Array.isArray(raw.allowed_movements) ? raw.allowed_movements : [];
+            const allowed_movements = incomingMoves
+                .map((m) => String(m).toLowerCase())
+                .filter((m) => MOVEMENTS.includes(m));
+            return {
+                name,
+                supports_lane_change: supports,
+                connected_to_intersection: connected,
+                has_traffic_light: connected ? hasTrafficLight : false,
+                allowed_movements: allowed_movements.length > 0 ? allowed_movements : ['straight']
+            };
+        }
+
+        function normalizeApproach(raw, id) {
+            const lanesRaw = raw && Array.isArray(raw.lanes) ? raw.lanes : [];
+            const lanes = lanesRaw.map((lane, idx) => normalizeLane(lane, id, idx));
+            return {
+                id,
+                name: raw && typeof raw.name === 'string' ? raw.name : id.charAt(0).toUpperCase() + id.slice(1),
+                lanes: lanes.length > 0 ? lanes : [defaultLane(id, 0)],
+                to_lane_count: (() => {
+                    const parsed = Number(raw && raw.to_lane_count);
+                    if (Number.isFinite(parsed) && parsed > 0) {
+                        return Math.max(1, Math.min(64, Math.floor(parsed)));
+                    }
+                    return lanes.length > 0 ? lanes.length : 1;
+                })()
+            };
+        }
+
+        function hydrateStateFromConfig(parsed) {
+            const loadedApproaches = parsed && Array.isArray(parsed.approaches) ? parsed.approaches : [];
+            const byId = new Map();
+            for (const approach of loadedApproaches) {
+                if (!approach || typeof approach.id !== 'string') {
+                    continue;
+                }
+                byId.set(approach.id.toLowerCase(), approach);
+            }
+
+            const ordered = APPROACH_ORDER.map((id, index) => {
+                const found = byId.get(id) || loadedApproaches[index] || null;
+                return normalizeApproach(found, id);
+            });
+
+            state = {
+                approaches: ordered,
+                signal_groups: parsed && Array.isArray(parsed.signal_groups) ? parsed.signal_groups : [],
+                lane_connections: parsed && Array.isArray(parsed.lane_connections)
+                    ? parsed.lane_connections.map((entry) => ({
+                        from_approach: String(entry.from_approach || '').toLowerCase(),
+                        from_lane_index: Number(entry.from_lane_index) || 0,
+                        movement: String(entry.movement || 'straight').toLowerCase(),
+                        to_approach: String(entry.to_approach || '').toLowerCase(),
+                        to_lane_index: Number(entry.to_lane_index) || 0
+                    }))
+                    : []
+            };
+
+            normalizeConnections();
+        }
+
+        function collectOutgoingPayload() {
+            const approachIndex = new Map();
+            for (let i = 0; i < APPROACH_ORDER.length; i++) {
+                approachIndex.set(APPROACH_ORDER[i], i);
+            }
+
+            return {
+                approaches: state.approaches.map((approach) => ({
+                    id: approach.id,
+                    name: approach.name,
+                    to_lane_count: toLaneCountForApproach(approach),
+                    lanes: approach.lanes.map((lane, laneIdx) => ({
+                        id: approachIndex.get(approach.id) * 100 + laneIdx,
+                        index: laneIdx,
+                        name: laneCode(approach.id, laneIdx),
+                        supports_lane_change: !!lane.supports_lane_change,
+                        connected_to_intersection: !!lane.connected_to_intersection,
+                        has_traffic_light: !!lane.connected_to_intersection && !!lane.has_traffic_light,
+                        allowed_movements: lane.allowed_movements.slice()
+                    }))
+                })),
+                signal_groups: state.signal_groups,
+                lane_connections: state.lane_connections.map((connection) => ({
+                    from_approach: connection.from_approach,
+                    from_lane_index: connection.from_lane_index,
+                    from_lane_id: (approachIndex.get(connection.from_approach) * 100) + Number(connection.from_lane_index),
+                    movement: connection.movement,
+                    to_approach: connection.to_approach,
+                    to_lane_index: connection.to_lane_index,
+                    to_lane_id: (approachIndex.get(connection.to_approach) * 100) + Number(connection.to_lane_index)
+                }))
+            };
+        }
+
+        function validateConfig() {
+            const errors = [];
+            if (!Array.isArray(state.approaches) || state.approaches.length !== 4) {
+                errors.push('Exactly 4 approaches are required (north/east/south/west).');
+                return errors;
+            }
+
+            const ids = state.approaches.map((a) => String(a.id || '').toLowerCase());
+            for (const expected of APPROACH_ORDER) {
+                if (!ids.includes(expected)) {
+                    errors.push(`Missing approach: ${expected}.`);
+                }
+            }
+
+            for (const approach of state.approaches) {
+                const aId = String(approach.id || 'unknown');
+                if (!Array.isArray(approach.lanes) || approach.lanes.length === 0) {
+                    errors.push(`Approach ${aId} must contain at least one lane.`);
+                    continue;
+                }
+                for (let laneIdx = 0; laneIdx < approach.lanes.length; laneIdx++) {
+                    const lane = approach.lanes[laneIdx];
+                    const moves = Array.isArray(lane.allowed_movements) ? lane.allowed_movements : [];
+                    if (moves.length === 0) {
+                        errors.push(`Approach ${aId}, lane ${laneCode(aId, laneIdx)}: select at least one movement.`);
+                    }
+                    if (lane.has_traffic_light && !lane.connected_to_intersection) {
+                        errors.push(`Approach ${aId}, lane ${laneCode(aId, laneIdx)}: stoplight requires connection to intersection.`);
+                    }
+                    for (const movement of moves) {
+                        const connection = getConnection(aId, laneIdx, movement);
+                        if (!connection) {
+                            errors.push(`Approach ${aId}, lane ${laneCode(aId, laneIdx)}: missing target lane for ${movement}.`);
+                            continue;
+                        }
+                        const targetApproach = approachById(connection.to_approach);
+                        if (!targetApproach) {
+                            errors.push(`Approach ${aId}, lane ${laneCode(aId, laneIdx)}: target approach for ${movement} does not exist.`);
+                            continue;
+                        }
+                        const toCount = toLaneCountForApproach(targetApproach);
+                        if (connection.to_lane_index < 0 || connection.to_lane_index >= toCount) {
+                            errors.push(`Approach ${aId}, lane ${laneCode(aId, laneIdx)}: target lane index for ${movement} is out of range.`);
+                        }
+                    }
+                }
+            }
+            return errors;
+        }
+
+        async function refreshRunState() {
+            try {
+                const res = await fetch('/snapshot');
+                if (!res.ok) {
+                    return;
+                }
+                const snapshot = await res.json();
+                const running = !!snapshot.running;
+                runStateEl.textContent = `sim state: ${running ? 'running' : 'stopped'}`;
+                btnStartEl.disabled = running;
+                btnApplyEl.disabled = running;
+            } catch {
+                runStateEl.textContent = 'sim state: unavailable';
+            }
+        }
+
+        function directionArrow(approachId) {
+            const id = String(approachId || '').toLowerCase();
+            if (id === 'north') return '↓';
+            if (id === 'south') return '↑';
+            if (id === 'east') return '←';
+            if (id === 'west') return '→';
+            return '•';
+        }
+
+        function toDirectionArrow(approachId) {
+            const id = String(approachId || '').toLowerCase();
+            if (id === 'north') return '↑';
+            if (id === 'south') return '↓';
+            if (id === 'east') return '→';
+            if (id === 'west') return '←';
+            return '•';
+        }
+
+        function movementShort(movement) {
+            if (movement === 'left') return 'L';
+            if (movement === 'right') return 'R';
+            if (movement === 'straight') return 'S';
+            return '?';
+        }
+
+        function movementColor(movement) {
+            if (movement === 'left') return '#f59e0b';
+            if (movement === 'right') return '#22c55e';
+            return '#60a5fa';
+        }
+
+        function routeLanePoints(approachId, laneIndex, type) {
+            const spacing = 10;
+            const idx = Math.max(0, Number(laneIndex) || 0);
+            const fromBandStart = 280;
+            const toBandStart = 340;
+            const westTopBand = 140;
+            const westBottomBand = 200;
+
+            if (approachId === 'north') {
+                if (type === 'from') {
+                    const x = (fromBandStart + 20) - idx * spacing;
+                    return { outer: { x, y: 20 }, inner: { x, y: 126 } };
+                }
+                return { outer: { x: toBandStart + idx * spacing, y: 20 }, inner: { x: toBandStart + idx * spacing, y: 126 } };
+            }
+
+            if (approachId === 'south') {
+                if (type === 'from') {
+                    return { outer: { x: toBandStart + idx * spacing, y: 340 }, inner: { x: toBandStart + idx * spacing, y: 234 } };
+                }
+                const x = (fromBandStart + 20) - idx * spacing;
+                return { outer: { x, y: 340 }, inner: { x, y: 234 } };
+            }
+
+            if (approachId === 'west') {
+                if (type === 'from') {
+                    return { outer: { x: 20, y: westBottomBand + idx * spacing }, inner: { x: 266, y: westBottomBand + idx * spacing } };
+                }
+                const y = (westTopBand + 20) - idx * spacing;
+                return { outer: { x: 20, y }, inner: { x: 266, y } };
+            }
+
+            if (type === 'from') {
+                const y = (westTopBand + 20) - idx * spacing;
+                return { outer: { x: 620, y }, inner: { x: 374, y } };
+            }
+            return { outer: { x: 620, y: westBottomBand + idx * spacing }, inner: { x: 374, y: westBottomBand + idx * spacing } };
+        }
+
+        function createSvgEl(tag, attrs = {}) {
+            const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+            for (const [k, v] of Object.entries(attrs)) {
+                el.setAttribute(k, String(v));
+            }
+            return el;
+        }
+
+        function renderRouteMap() {
+            routeMapEl.innerHTML = '';
+
+            const defs = createSvgEl('defs');
+            const marker = createSvgEl('marker', {
+                id: 'routeArrow',
+                markerWidth: 4,
+                markerHeight: 4,
+                refX: 3.5,
+                refY: 2,
+                orient: 'auto',
+                markerUnits: 'strokeWidth'
+            });
+            marker.appendChild(createSvgEl('path', { d: 'M0,0 L4,2 L0,4 z', fill: '#cbd5e1' }));
+            defs.appendChild(marker);
+            routeMapEl.appendChild(defs);
+
+            routeMapEl.appendChild(createSvgEl('rect', {
+                x: 266,
+                y: 126,
+                width: 108,
+                height: 108,
+                rx: 8,
+                fill: 'rgba(30,41,59,0.45)',
+                stroke: '#334155',
+                'stroke-dasharray': '4 3'
+            }));
+
+            for (const approachId of APPROACH_ORDER) {
+                const approach = approachById(approachId);
+                const fromLaneCount = Math.max(1, (approach && Array.isArray(approach.lanes)) ? approach.lanes.length : 1);
+                const toLaneCount = Math.max(1, approach ? toLaneCountForApproach(approach) : 1);
+
+                for (let laneIdx = 0; laneIdx < fromLaneCount; laneIdx++) {
+                    const fromPts = routeLanePoints(approachId, laneIdx, 'from');
+
+                    routeMapEl.appendChild(createSvgEl('line', {
+                        x1: fromPts.outer.x,
+                        y1: fromPts.outer.y,
+                        x2: fromPts.inner.x,
+                        y2: fromPts.inner.y,
+                        stroke: '#475569',
+                        'stroke-width': 2,
+                        opacity: 0.95
+                    }));
+                }
+
+                for (let laneIdx = 0; laneIdx < toLaneCount; laneIdx++) {
+                    const toPts = routeLanePoints(approachId, laneIdx, 'to');
+
+                    routeMapEl.appendChild(createSvgEl('line', {
+                        x1: toPts.inner.x,
+                        y1: toPts.inner.y,
+                        x2: toPts.outer.x,
+                        y2: toPts.outer.y,
+                        stroke: '#64748b',
+                        'stroke-width': 2,
+                        opacity: 0.95
+                    }));
+                }
+            }
+
+            const labels = [
+                { x: 320, y: 14, text: `${fromLabel('north')} / ${toLabel('north')}`, anchor: 'middle' },
+                { x: 320, y: 356, text: `${toLabel('south')} / ${fromLabel('south')}`, anchor: 'middle' },
+                { x: 8, y: 124, text: `${toLabel('west')}`, anchor: 'start' },
+                { x: 8, y: 246, text: `${fromLabel('west')}`, anchor: 'start' },
+                { x: 632, y: 124, text: `${fromLabel('east')}`, anchor: 'end' },
+                { x: 632, y: 246, text: `${toLabel('east')}`, anchor: 'end' }
+            ];
+
+            for (const info of labels) {
+                const label = createSvgEl('text', {
+                    x: info.x,
+                    y: info.y,
+                    'text-anchor': info.anchor,
+                    'font-size': 11,
+                    fill: '#cbd5e1'
+                });
+                label.textContent = info.text;
+                routeMapEl.appendChild(label);
+            }
+
+            for (const connection of state.lane_connections) {
+                const fromPts = routeLanePoints(connection.from_approach, connection.from_lane_index, 'from');
+                const toPts = routeLanePoints(connection.to_approach, connection.to_lane_index, 'to');
+                const from = fromPts.inner;
+                const to = toPts.inner;
+                const color = movementColor(connection.movement);
+
+                let routeEl;
+                if (connection.movement === 'straight') {
+                    routeEl = createSvgEl('line', {
+                        x1: from.x,
+                        y1: from.y,
+                        x2: to.x,
+                        y2: to.y,
+                        fill: 'none',
+                        stroke: color,
+                        'stroke-width': 2.6,
+                        'marker-end': 'url(#routeArrow)',
+                        opacity: 0.98
+                    });
+                } else {
+                    routeEl = createSvgEl('path', {
+                        d: `M ${from.x} ${from.y} Q 320 180 ${to.x} ${to.y}`,
+                        fill: 'none',
+                        stroke: color,
+                        'stroke-width': 2.6,
+                        'marker-end': 'url(#routeArrow)',
+                        opacity: 0.98
+                    });
+                }
+                routeMapEl.appendChild(routeEl);
+
+                const midX = (from.x + to.x) * 0.5;
+                const midY = (from.y + to.y) * 0.5;
+                const idxLabel = createSvgEl('text', {
+                    x: midX + 4,
+                    y: midY - 4,
+                    'text-anchor': 'start',
+                    'font-size': 10,
+                    fill: '#e2e8f0'
+                });
+                idxLabel.textContent = `${connection.from_lane_index}→${connection.to_lane_index}`;
+                routeMapEl.appendChild(idxLabel);
+            }
+
+            for (const approachId of APPROACH_ORDER) {
+                const approach = approachById(approachId);
+                const fromLaneCount = Math.max(1, (approach && Array.isArray(approach.lanes)) ? approach.lanes.length : 1);
+                const toLaneCount = Math.max(1, approach ? toLaneCountForApproach(approach) : 1);
+                for (let laneIdx = 0; laneIdx < fromLaneCount; laneIdx++) {
+                    const fromPts = routeLanePoints(approachId, laneIdx, 'from');
+
+                    const fromText = createSvgEl('text', {
+                        x: fromPts.outer.x,
+                        y: fromPts.outer.y + ((approachId === 'north' || approachId === 'west') ? -4 : 12),
+                        'text-anchor': 'middle',
+                        'font-size': 9,
+                        fill: '#94a3b8'
+                    });
+                    fromText.textContent = `${laneIdx}`;
+                    routeMapEl.appendChild(fromText);
+                }
+
+                for (let laneIdx = 0; laneIdx < toLaneCount; laneIdx++) {
+                    const toPts = routeLanePoints(approachId, laneIdx, 'to');
+                    const toText = createSvgEl('text', {
+                        x: toPts.outer.x,
+                        y: toPts.outer.y + ((approachId === 'north' || approachId === 'east') ? -4 : 12),
+                        'text-anchor': 'middle',
+                        'font-size': 9,
+                        fill: '#94a3b8'
+                    });
+                    toText.textContent = `${laneIdx}`;
+                    routeMapEl.appendChild(toText);
+                }
+            }
+        }
+
+        function renderGraph() {
+            graphBoardEl.innerHTML = '';
+
+            const center = document.createElement('div');
+            center.className = 'graph-center';
+            center.textContent = 'Intersection';
+            graphBoardEl.appendChild(center);
+
+            for (const approachId of APPROACH_ORDER) {
+                const approach = state.approaches.find((entry) => entry.id === approachId);
+                const wrapper = document.createElement('div');
+                wrapper.className = `graph-approach gp-${approachId}`;
+
+                const title = document.createElement('h4');
+                title.textContent = (approach && approach.name ? approach.name : approachWord(approachId)).toUpperCase();
+                wrapper.appendChild(title);
+
+                const sections = document.createElement('div');
+                sections.className = 'graph-sections';
+                if (approachId === 'east' || approachId === 'west') {
+                    sections.style.gridTemplateColumns = '1fr';
+                }
+
+                const fromSection = document.createElement('div');
+                fromSection.className = 'graph-section';
+                const fromTitle = document.createElement('div');
+                fromTitle.className = 'graph-subtitle';
+                fromTitle.textContent = fromLabel(approachId);
+                fromSection.appendChild(fromTitle);
+                const fromLanes = document.createElement('div');
+                fromLanes.className = 'graph-lanes';
+
+                const toSection = document.createElement('div');
+                toSection.className = 'graph-section';
+                const toTitle = document.createElement('div');
+                toTitle.className = 'graph-subtitle';
+                toTitle.textContent = `${toLabel(approachId)} (${toLaneCountForApproach(approach)} lanes)`;
+                toSection.appendChild(toTitle);
+                const toLanes = document.createElement('div');
+                toLanes.className = 'graph-lanes';
+
+                if (!approach || !Array.isArray(approach.lanes) || approach.lanes.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'small';
+                    empty.textContent = 'No lanes';
+                    fromLanes.appendChild(empty.cloneNode(true));
+                    toLanes.appendChild(empty);
+                } else {
+                    for (let laneIdx = 0; laneIdx < approach.lanes.length; laneIdx++) {
+                        const lane = approach.lanes[laneIdx];
+                        const fromLaneEl = document.createElement('div');
+                        fromLaneEl.className = 'graph-lane';
+
+                        const fromMain = document.createElement('div');
+                        fromMain.className = 'graph-lane-main';
+
+                        const fromArr = document.createElement('span');
+                        fromArr.className = 'graph-arrow';
+                        fromArr.textContent = directionArrow(approachId);
+                        fromMain.appendChild(fromArr);
+
+                        const indexBadge = document.createElement('span');
+                        indexBadge.className = 'lane-index';
+                        indexBadge.textContent = String(laneIdx);
+                        fromMain.appendChild(indexBadge);
+
+                        const fromLaneName = document.createElement('span');
+                        fromLaneName.className = 'graph-lane-name';
+                        fromLaneName.textContent = `${laneCode(approachId, laneIdx)} index ${laneIdx}`;
+                        fromMain.appendChild(fromLaneName);
+
+                        fromLaneEl.appendChild(fromMain);
+
+                        const fromRight = document.createElement('div');
+                        fromRight.className = 'row';
+                        fromRight.style.margin = '0';
+                        fromRight.style.gap = '6px';
+
+                        const moves = document.createElement('div');
+                        moves.className = 'move-badges';
+                        for (const movement of lane.allowed_movements || []) {
+                            const badge = document.createElement('span');
+                            badge.className = 'badge';
+                            badge.textContent = movementShort(movement);
+                            moves.appendChild(badge);
+                        }
+                        fromRight.appendChild(moves);
+
+                        const light = document.createElement('span');
+                        light.className = 'light-dot';
+                        if (!(lane.connected_to_intersection && lane.has_traffic_light)) {
+                            light.classList.add('off');
+                        }
+                        fromRight.appendChild(light);
+
+                        fromLaneEl.appendChild(fromRight);
+                        fromLanes.appendChild(fromLaneEl);
+
+                        const toLaneEl = document.createElement('div');
+                        toLaneEl.className = 'graph-lane';
+
+                        const toMain = document.createElement('div');
+                        toMain.className = 'graph-lane-main';
+
+                        const toArr = document.createElement('span');
+                        toArr.className = 'graph-arrow';
+                        toArr.textContent = toDirectionArrow(approachId);
+                        toMain.appendChild(toArr);
+
+                        const toIndexBadge = document.createElement('span');
+                        toIndexBadge.className = 'lane-index';
+                        toIndexBadge.textContent = String(laneIdx);
+                        toMain.appendChild(toIndexBadge);
+
+                        const toLaneName = document.createElement('span');
+                        toLaneName.className = 'graph-lane-name';
+                        toLaneName.textContent = `${laneCode(approachId, laneIdx)}`;
+                        toMain.appendChild(toLaneName);
+
+                        toLaneEl.appendChild(toMain);
+
+                        const toRight = document.createElement('div');
+                        toRight.className = 'row';
+                        toRight.style.margin = '0';
+                        toRight.style.gap = '6px';
+
+                        const toBadgeWrap = document.createElement('div');
+                        toBadgeWrap.className = 'move-badges';
+                        const toBadge = document.createElement('span');
+                        toBadge.className = 'badge';
+                        toBadge.textContent = 'OUT';
+                        toBadgeWrap.appendChild(toBadge);
+                        toRight.appendChild(toBadgeWrap);
+
+                        toLaneEl.appendChild(toRight);
+                    }
+
+                    const toLaneCount = toLaneCountForApproach(approach);
+                    for (let toIdx = 0; toIdx < toLaneCount; toIdx++) {
+                        const toLaneEl = document.createElement('div');
+                        toLaneEl.className = 'graph-lane';
+
+                        const toMain = document.createElement('div');
+                        toMain.className = 'graph-lane-main';
+
+                        const toArr = document.createElement('span');
+                        toArr.className = 'graph-arrow';
+                        toArr.textContent = toDirectionArrow(approachId);
+                        toMain.appendChild(toArr);
+
+                        const toIndexBadge = document.createElement('span');
+                        toIndexBadge.className = 'lane-index';
+                        toIndexBadge.textContent = String(toIdx);
+                        toMain.appendChild(toIndexBadge);
+
+                        const toLaneName = document.createElement('span');
+                        toLaneName.className = 'graph-lane-name';
+                        toLaneName.textContent = `${laneCode(approachId, toIdx)}`;
+                        toMain.appendChild(toLaneName);
+
+                        toLaneEl.appendChild(toMain);
+
+                        const toRight = document.createElement('div');
+                        toRight.className = 'row';
+                        toRight.style.margin = '0';
+                        toRight.style.gap = '6px';
+
+                        const toBadgeWrap = document.createElement('div');
+                        toBadgeWrap.className = 'move-badges';
+                        const toBadge = document.createElement('span');
+                        toBadge.className = 'badge';
+                        toBadge.textContent = 'OUT';
+                        toBadgeWrap.appendChild(toBadge);
+                        toRight.appendChild(toBadgeWrap);
+
+                        toLaneEl.appendChild(toRight);
+                        toLanes.appendChild(toLaneEl);
+                    }
+                }
+
+                fromSection.appendChild(fromLanes);
+                toSection.appendChild(toLanes);
+
+                if (approachId === 'west' || approachId === 'south') {
+                    sections.appendChild(toSection);
+                    sections.appendChild(fromSection);
+                } else {
+                    sections.appendChild(fromSection);
+                    sections.appendChild(toSection);
+                }
+                wrapper.appendChild(sections);
+                graphBoardEl.appendChild(wrapper);
+            }
+
+            renderRouteMap();
+        }
+
+        function renderEditor() {
+            normalizeConnections();
+            approachesEl.innerHTML = '';
+
+            for (let aIdx = 0; aIdx < state.approaches.length; aIdx++) {
+                const approach = state.approaches[aIdx];
+
+                const card = document.createElement('div');
+                card.className = 'approach-card';
+
+                const head = document.createElement('div');
+                head.className = 'approach-head';
+
+                const left = document.createElement('div');
+                left.className = 'approach-title';
+                left.textContent = fromLabel(approach.id);
+
+                const right = document.createElement('input');
+                right.type = 'text';
+                right.className = 'approach-name';
+                right.value = approach.name;
+                right.placeholder = 'Approach name';
+                right.oninput = (e) => {
+                    state.approaches[aIdx].name = e.target.value;
+                    renderGraph();
+                };
+
+                head.appendChild(left);
+                head.appendChild(right);
+                card.appendChild(head);
+
+                const laneList = document.createElement('div');
+                laneList.className = 'lane-list';
+
+                for (let lIdx = 0; lIdx < approach.lanes.length; lIdx++) {
+                    const lane = approach.lanes[lIdx];
+
+                    const laneRow = document.createElement('div');
+                    laneRow.className = 'lane-row';
+
+                    const laneTop = document.createElement('div');
+                    laneTop.className = 'lane-top';
+
+                    const laneCodeEl = document.createElement('div');
+                    laneCodeEl.className = 'lane-code';
+                    laneCodeEl.textContent = laneCode(approach.id, lIdx);
+
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'danger';
+                    delBtn.textContent = 'Delete lane';
+                    delBtn.onclick = () => {
+                        state.approaches[aIdx].lanes.splice(lIdx, 1);
+                        renderEditor();
+                    };
+
+                    laneTop.appendChild(laneCodeEl);
+                    laneTop.appendChild(delBtn);
+                    laneRow.appendChild(laneTop);
+
+                    const opts = document.createElement('div');
+                    opts.className = 'lane-options';
+
+                    const lcLabel = document.createElement('label');
+                    const lcChk = document.createElement('input');
+                    lcChk.type = 'checkbox';
+                    lcChk.checked = !!lane.supports_lane_change;
+                    lcChk.onchange = (e) => {
+                        state.approaches[aIdx].lanes[lIdx].supports_lane_change = !!e.target.checked;
+                        renderGraph();
+                    };
+                    lcLabel.appendChild(lcChk);
+                    lcLabel.appendChild(document.createTextNode('supports lane change'));
+                    opts.appendChild(lcLabel);
+
+                    const connLabel = document.createElement('label');
+                    const connChk = document.createElement('input');
+                    connChk.type = 'checkbox';
+                    connChk.checked = !!lane.connected_to_intersection;
+                    connChk.onchange = (e) => {
+                        const value = !!e.target.checked;
+                        state.approaches[aIdx].lanes[lIdx].connected_to_intersection = value;
+                        if (!value) {
+                            state.approaches[aIdx].lanes[lIdx].has_traffic_light = false;
+                        }
+                        renderEditor();
+                    };
+                    connLabel.appendChild(connChk);
+                    connLabel.appendChild(document.createTextNode('connected to intersection'));
+                    opts.appendChild(connLabel);
+
+                    const lightLabel = document.createElement('label');
+                    const lightChk = document.createElement('input');
+                    lightChk.type = 'checkbox';
+                    lightChk.checked = !!lane.has_traffic_light;
+                    lightChk.disabled = !lane.connected_to_intersection;
+                    lightChk.onchange = (e) => {
+                        state.approaches[aIdx].lanes[lIdx].has_traffic_light = !!e.target.checked;
+                        renderGraph();
+                    };
+                    lightLabel.appendChild(lightChk);
+                    lightLabel.appendChild(document.createTextNode('stoplight at lane end'));
+                    opts.appendChild(lightLabel);
+
+                    const allowedBox = document.createElement('div');
+                    allowedBox.className = 'allowed-box';
+                    const allowedTitle = document.createElement('div');
+                    allowedTitle.className = 'allowed-title';
+                    allowedTitle.textContent = 'Allowed Direction';
+                    const allowedOptions = document.createElement('div');
+                    allowedOptions.className = 'allowed-options';
+                    const movementMap = document.createElement('div');
+                    movementMap.className = 'movement-map';
+
+                    for (const movement of MOVEMENTS) {
+                        const moveLabel = document.createElement('label');
+                        const moveChk = document.createElement('input');
+                        moveChk.type = 'checkbox';
+                        moveChk.checked = lane.allowed_movements.includes(movement);
+                        moveChk.onchange = (e) => {
+                            const targetLane = state.approaches[aIdx].lanes[lIdx];
+                            const set = new Set(targetLane.allowed_movements);
+                            if (e.target.checked) {
+                                set.add(movement);
+                            } else {
+                                set.delete(movement);
+                            }
+                            targetLane.allowed_movements = MOVEMENTS.filter((m) => set.has(m));
+                            normalizeConnections();
+                            renderEditor();
+                            renderGraph();
+                        };
+                        moveLabel.appendChild(moveChk);
+                        if (movement === 'left') {
+                            moveLabel.appendChild(document.createTextNode('to the left'));
+                        } else if (movement === 'right') {
+                            moveLabel.appendChild(document.createTextNode('to the right'));
+                        } else {
+                            moveLabel.appendChild(document.createTextNode('straight ahead'));
+                        }
+                        allowedOptions.appendChild(moveLabel);
+
+                        if (lane.allowed_movements.includes(movement)) {
+                            const mappingRow = document.createElement('div');
+                            mappingRow.className = 'movement-row';
+
+                            const tag = document.createElement('span');
+                            tag.className = 'movement-tag';
+                            tag.textContent = movement === 'left' ? 'to the left' : (movement === 'right' ? 'to the right' : 'straight ahead');
+
+                            const targetApproachSelect = document.createElement('select');
+                            const expectedApproach = destinationApproachFor(approach.id, movement);
+                            const currentConnection = getConnection(approach.id, lIdx, movement);
+                            const selectedApproach = currentConnection ? currentConnection.to_approach : expectedApproach;
+                            for (const optionApproachId of APPROACH_ORDER) {
+                                const option = document.createElement('option');
+                                option.value = optionApproachId;
+                                option.textContent = toLabel(optionApproachId);
+                                if (optionApproachId === selectedApproach) {
+                                    option.selected = true;
+                                }
+                                targetApproachSelect.appendChild(option);
+                            }
+
+                            const targetLaneInput = document.createElement('input');
+                            targetLaneInput.type = 'number';
+                            targetLaneInput.min = '0';
+                            const targetApproach = approachById(selectedApproach);
+                            const maxLane = targetApproach ? Math.max(0, toLaneCountForApproach(targetApproach) - 1) : 0;
+                            targetLaneInput.max = String(maxLane);
+                            targetLaneInput.value = String(currentConnection ? currentConnection.to_lane_index : Math.min(lIdx, maxLane));
+
+                            const applyConnection = () => {
+                                const toApproach = targetApproachSelect.value;
+                                const toApproachObj = approachById(toApproach);
+                                const toMax = toApproachObj ? Math.max(0, toLaneCountForApproach(toApproachObj) - 1) : 0;
+                                const requested = Number(targetLaneInput.value);
+                                const targetIdx = Number.isFinite(requested) ? Math.max(0, Math.min(toMax, requested)) : 0;
+                                targetLaneInput.max = String(toMax);
+                                targetLaneInput.value = String(targetIdx);
+                                setConnection(approach.id, lIdx, movement, toApproach, targetIdx);
+                                renderRouteMap();
+                            };
+
+                            targetApproachSelect.onchange = applyConnection;
+                            targetLaneInput.oninput = applyConnection;
+
+                            const laneLabel = document.createElement('span');
+                            laneLabel.textContent = 'to lane index';
+                            laneLabel.className = 'small';
+
+                            mappingRow.appendChild(tag);
+                            mappingRow.appendChild(targetApproachSelect);
+                            mappingRow.appendChild(laneLabel);
+                            mappingRow.appendChild(targetLaneInput);
+                            movementMap.appendChild(mappingRow);
+                        }
+                    }
+
+                    laneRow.appendChild(opts);
+                    allowedBox.appendChild(allowedTitle);
+                    allowedBox.appendChild(allowedOptions);
+                    allowedBox.appendChild(movementMap);
+                    laneRow.appendChild(allowedBox);
+                    laneList.appendChild(laneRow);
+                }
+
+                card.appendChild(laneList);
+
+                const actions = document.createElement('div');
+                actions.className = 'row';
+                actions.style.marginTop = '8px';
+                actions.style.marginBottom = '0';
+
+                const toLaneLabel = document.createElement('label');
+                toLaneLabel.textContent = `${toLabel(approach.id)} lanes:`;
+                const toLaneInput = document.createElement('input');
+                toLaneInput.type = 'number';
+                toLaneInput.min = '1';
+                toLaneInput.max = '64';
+                toLaneInput.value = String(toLaneCountForApproach(approach));
+                toLaneInput.style.width = '96px';
+                toLaneInput.oninput = (e) => {
+                    const raw = Number(e.target.value);
+                    const nextCount = Number.isFinite(raw) ? Math.max(1, Math.min(64, Math.floor(raw))) : 1;
+                    state.approaches[aIdx].to_lane_count = nextCount;
+                    normalizeConnections();
+                    renderEditor();
+                };
+                toLaneLabel.appendChild(toLaneInput);
+
+                const addBtn = document.createElement('button');
+                addBtn.className = 'secondary';
+                addBtn.textContent = 'Add lane';
+                addBtn.onclick = () => {
+                    const nextLaneIndex = state.approaches[aIdx].lanes.length;
+                    state.approaches[aIdx].lanes.push(defaultLane(state.approaches[aIdx].id, nextLaneIndex));
+                    renderEditor();
+                };
+
+                const hint = document.createElement('span');
+                hint.className = 'small';
+                hint.textContent = 'Lane indices are per direction: 0 = inner lane, higher = outward.';
+
+                actions.appendChild(addBtn);
+                actions.appendChild(toLaneLabel);
+                actions.appendChild(hint);
+                card.appendChild(actions);
+
+                approachesEl.appendChild(card);
+            }
+
+            renderGraph();
+        }
+
+        async function loadConfig() {
+            try {
+                btnLoadEl.disabled = true;
+                const res = await fetch('/config/api');
+                const txt = await res.text();
+                if (!res.ok) {
+                    clearErrors();
+                    setBanner('Load failed', 'err');
+                    setStatus(`Load failed: ${txt}`, 'err');
+                    return;
+                }
+
+                let parsed;
+                try {
+                    parsed = JSON.parse(txt);
+                } catch {
+                    clearErrors();
+                    setBanner('Load returned invalid JSON', 'err');
+                    setStatus('Could not parse loaded config', 'err');
+                    return;
+                }
+
+                hydrateStateFromConfig(parsed);
+                renderEditor();
+                clearErrors();
+                setBanner('Configuration loaded', 'ok');
+                setStatus('Config loaded', 'ok');
+                await refreshRunState();
+            } catch (e) {
+                clearErrors();
+                setBanner('Load request failed', 'err');
+                setStatus(`Load error: ${String(e)}`, 'err');
+            } finally {
+                btnLoadEl.disabled = false;
+            }
+        }
+
+        async function saveConfig() {
+            const errors = validateConfig();
+            if (errors.length > 0) {
+                setErrors(errors);
+                setBanner('Validation failed', 'err');
+                setStatus('Fix validation errors before saving', 'err');
+                return;
+            }
+
+            const outgoing = collectOutgoingPayload();
+            const normalized = JSON.stringify(outgoing);
+
+            try {
+                btnSaveEl.disabled = true;
+                const res = await fetch('/config/api', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: normalized
+                });
+                const txt = await res.text();
+                if (!res.ok) {
+                    const payload = tryParseResponseBody(txt);
+                    const errs = payload && Array.isArray(payload.errors) ? payload.errors : [];
+                    setBanner('Save rejected by server', 'err');
+                    setErrors(errs.length > 0 ? errs : [txt]);
+                    setStatus(`Save failed: ${txt}`, 'err');
+                    return;
+                }
+                clearErrors();
+                setBanner('Config saved as pending (apply on start/reset)', 'ok');
+                setStatus('Config saved as pending (apply on start/reset)', 'ok');
+            } catch (e) {
+                clearErrors();
+                setBanner('Save request failed', 'err');
+                setStatus(`Save error: ${String(e)}`, 'err');
+            } finally {
+                btnSaveEl.disabled = false;
+            }
+        }
+
+        async function applyConfig() {
+            try {
+                btnApplyEl.disabled = true;
+                await fetch('/command?cmd=reset');
+                clearErrors();
+                setBanner('Reset sent, pending config should now be active', 'ok');
+                setStatus('Reset sent; pending config should now be active', 'ok');
+                await refreshRunState();
+            } catch (e) {
+                clearErrors();
+                setBanner('Apply request failed', 'err');
+                setStatus(`Apply error: ${String(e)}`, 'err');
+            } finally {
+                btnApplyEl.disabled = false;
+            }
+        }
+
+        async function startSim() {
+            try {
+                btnStartEl.disabled = true;
+                await fetch('/command?cmd=start');
+                clearErrors();
+                setBanner('Start command sent', 'ok');
+                setStatus('Start sent', 'ok');
+                await refreshRunState();
+            } catch (e) {
+                clearErrors();
+                setBanner('Start request failed', 'err');
+                setStatus(`Start error: ${String(e)}`, 'err');
+            } finally {
+                btnStartEl.disabled = false;
+            }
+        }
+
+        hydrateStateFromConfig({
+            approaches: [
+                defaultApproach('north'),
+                defaultApproach('east'),
+                defaultApproach('south'),
+                defaultApproach('west')
+            ],
+            signal_groups: [],
+            lane_connections: []
+        });
+        renderEditor();
+        loadConfig();
+        refreshRunState();
+        setInterval(refreshRunState, 1500);
+    </script>
+</body>
+</html>

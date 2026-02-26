@@ -1,20 +1,79 @@
 #include "SimulatorEngine.hpp"
 #include <array>
+#include <algorithm>
+#include <unordered_set>
 #include <sstream>
 #include <iostream>
 #include <utility>
 
 namespace crossroads
 {
+    namespace
+    {
+        ApproachId approachFromDirection(Direction dir)
+        {
+            switch (dir)
+            {
+            case Direction::North:
+                return ApproachId::North;
+            case Direction::South:
+                return ApproachId::South;
+            case Direction::East:
+                return ApproachId::East;
+            case Direction::West:
+                return ApproachId::West;
+            }
+            return ApproachId::North;
+        }
+
+        const LaneConfig *findLaneConfigForVehicle(const IntersectionConfig &config, Direction dir, LaneId lane_id)
+        {
+            ApproachId approach = approachFromDirection(dir);
+            auto approach_it = std::find_if(config.approaches.begin(), config.approaches.end(),
+                                            [approach](const ApproachConfig &entry)
+                                            { return entry.id == approach; });
+            if (approach_it == config.approaches.end())
+            {
+                return nullptr;
+            }
+
+            auto lane_it = std::find_if(approach_it->lanes.begin(), approach_it->lanes.end(),
+                                        [lane_id](const LaneConfig &lane)
+                                        { return lane.id == lane_id; });
+            if (lane_it == approach_it->lanes.end())
+            {
+                return nullptr;
+            }
+            return &(*lane_it);
+        }
+    }
+
     SimulatorEngine::SimulatorEngine(double traffic_rate, double ns_duration, double ew_duration)
-        : control_mode(ControlMode::Basic),
-          traffic(traffic_rate),
+        : SimulatorEngine(makeDefaultIntersectionConfig(), traffic_rate, ns_duration, ew_duration)
+    {
+    }
+
+    SimulatorEngine::SimulatorEngine(const IntersectionConfig &intersection_config,
+                                     double traffic_rate,
+                                     double ns_duration,
+                                     double ew_duration)
+        : checker(intersection_config),
+          control_mode(ControlMode::Basic),
+          traffic(intersection_config, traffic_rate),
           ns_duration(ns_duration),
           ew_duration(ew_duration),
+          intersection_config(intersection_config),
           current_time(0.0),
           safety_violations(0)
     {
-        controller = std::make_unique<BasicControllerAdapter>(ns_duration, ew_duration);
+        if (this->intersection_config.signal_groups.empty())
+        {
+            controller = std::make_unique<BasicControllerAdapter>(ns_duration, ew_duration);
+        }
+        else
+        {
+            controller = std::make_unique<ConfigurableSignalGroupController>(this->intersection_config);
+        }
     }
 
     void SimulatorEngine::simulate(double duration_seconds, double time_step)
@@ -45,7 +104,8 @@ namespace crossroads
         processVehicleCrossings();
         completeVehicleCrossings();
 
-        if (!checker.isSafe(getCurrentLightState()))
+        IntersectionState current_state = getCurrentLightState();
+        if (!checker.isSafe(current_state) || !isConfigSignalStateSafe(current_state))
         {
             safety_violations++;
             if (control_mode != ControlMode::NullControl)
@@ -70,15 +130,27 @@ namespace crossroads
         for (int dir = 0; dir < 4; ++dir)
         {
             Direction lane = static_cast<Direction>(dir);
-            if (isLightGreen(lane))
+            auto &queue = traffic.getQueueByDirection(lane);
+            for (auto &vehicle : queue)
             {
-                auto &queue = traffic.getQueueByDirection(lane);
-                for (auto &vehicle : queue)
+                if (!vehicle.isWaiting() || vehicle.position_in_lane < STOP_TARGET)
                 {
-                    if (vehicle.isWaiting() && vehicle.position_in_lane >= STOP_TARGET)
-                    {
-                        vehicle.crossing_time = current_time;
-                    }
+                    continue;
+                }
+
+                const LaneConfig *lane_cfg = findLaneConfigForVehicle(intersection_config, lane, vehicle.lane_id);
+                bool connected = lane_cfg ? lane_cfg->connected_to_intersection : true;
+                bool has_traffic_light = lane_cfg ? lane_cfg->has_traffic_light : true;
+
+                if (!connected)
+                {
+                    continue;
+                }
+
+                bool can_cross = !has_traffic_light || isLightGreen(lane);
+                if (can_cross)
+                {
+                    vehicle.crossing_time = current_time;
                 }
             }
         }
@@ -156,6 +228,36 @@ namespace crossroads
             }
             return "red";
         }
+
+        const char *toString(MovementType movement)
+        {
+            switch (movement)
+            {
+            case MovementType::Straight:
+                return "straight";
+            case MovementType::Left:
+                return "left";
+            case MovementType::Right:
+                return "right";
+            }
+            return "straight";
+        }
+
+        const char *toString(ApproachId approach)
+        {
+            switch (approach)
+            {
+            case ApproachId::North:
+                return "north";
+            case ApproachId::East:
+                return "east";
+            case ApproachId::South:
+                return "south";
+            case ApproachId::West:
+                return "west";
+            }
+            return "north";
+        }
     }
 
     std::string SimulatorEngine::getSnapshotJson() const
@@ -183,7 +285,13 @@ namespace crossroads
                 out << "\"turning\":" << (v.turning ? "true" : "false") << ",";
                 out << "\"crossing_time\":" << v.crossing_time << ",";
                 out << "\"crossing_duration\":" << v.crossing_duration << ",";
-                out << "\"queue_index\":" << static_cast<int>(v.queue_index);
+                out << "\"queue_index\":" << static_cast<int>(v.queue_index) << ",";
+                out << "\"lane_id\":" << v.lane_id << ",";
+                out << "\"movement\":\"" << toString(v.movement) << "\",";
+                out << "\"destination_approach\":\"" << toString(v.destination_approach) << "\",";
+                out << "\"destination_lane_index\":" << v.destination_lane_index << ",";
+                out << "\"destination_lane_id\":" << v.destination_lane_id << ",";
+                out << "\"lane_change_allowed\":" << (v.lane_change_allowed ? "true" : "false");
                 out << "}";
             }
             out << "]";
@@ -286,7 +394,14 @@ namespace crossroads
 
         if (control_mode == ControlMode::Basic)
         {
-            controller = std::make_unique<BasicControllerAdapter>(ns_duration, ew_duration);
+            if (intersection_config.signal_groups.empty())
+            {
+                controller = std::make_unique<BasicControllerAdapter>(ns_duration, ew_duration);
+            }
+            else
+            {
+                controller = std::make_unique<ConfigurableSignalGroupController>(intersection_config);
+            }
         }
         else
         {
@@ -311,6 +426,11 @@ namespace crossroads
         }
     }
 
+    const IntersectionConfig &SimulatorEngine::getIntersectionConfig() const
+    {
+        return intersection_config;
+    }
+
     bool SimulatorEngine::isLightGreen(Direction dir) const
     {
         auto state = getCurrentLightState();
@@ -326,6 +446,105 @@ namespace crossroads
             return state.west == LightState::Green;
         }
         return false;
+    }
+
+    std::vector<SignalGroupId> SimulatorEngine::resolveActiveSignalGroups(const IntersectionState &state) const
+    {
+        auto is_active = [](LightState value)
+        { return value == LightState::Green || value == LightState::Orange; };
+
+        auto findApproachForLane = [&](LaneId lane_id, ApproachId &approach_out)
+        {
+            for (const auto &approach : intersection_config.approaches)
+            {
+                auto lane_it = std::find_if(approach.lanes.begin(), approach.lanes.end(),
+                                            [lane_id](const LaneConfig &lane)
+                                            { return lane.id == lane_id; });
+                if (lane_it != approach.lanes.end())
+                {
+                    approach_out = approach.id;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        std::unordered_set<SignalGroupId> active_ids;
+
+        auto includeMatchingGroups = [&](ApproachId approach, MovementType movement)
+        {
+            for (const auto &group : intersection_config.signal_groups)
+            {
+                bool movement_match = std::find(group.green_movements.begin(), group.green_movements.end(), movement) != group.green_movements.end();
+                if (!movement_match)
+                {
+                    continue;
+                }
+
+                for (LaneId lane_id : group.controlled_lanes)
+                {
+                    ApproachId lane_approach;
+                    if (findApproachForLane(lane_id, lane_approach) && lane_approach == approach)
+                    {
+                        active_ids.insert(group.id);
+                        break;
+                    }
+                }
+            }
+        };
+
+        if (is_active(state.north))
+        {
+            includeMatchingGroups(ApproachId::North, MovementType::Straight);
+            includeMatchingGroups(ApproachId::North, MovementType::Left);
+        }
+        if (is_active(state.south))
+        {
+            includeMatchingGroups(ApproachId::South, MovementType::Straight);
+            includeMatchingGroups(ApproachId::South, MovementType::Left);
+        }
+        if (is_active(state.east))
+        {
+            includeMatchingGroups(ApproachId::East, MovementType::Straight);
+            includeMatchingGroups(ApproachId::East, MovementType::Left);
+        }
+        if (is_active(state.west))
+        {
+            includeMatchingGroups(ApproachId::West, MovementType::Straight);
+            includeMatchingGroups(ApproachId::West, MovementType::Left);
+        }
+
+        if (is_active(state.turnSouthEast))
+            includeMatchingGroups(ApproachId::South, MovementType::Right);
+        if (is_active(state.turnNorthWest))
+            includeMatchingGroups(ApproachId::North, MovementType::Right);
+        if (is_active(state.turnWestSouth))
+            includeMatchingGroups(ApproachId::West, MovementType::Right);
+        if (is_active(state.turnEastNorth))
+            includeMatchingGroups(ApproachId::East, MovementType::Right);
+
+        return std::vector<SignalGroupId>(active_ids.begin(), active_ids.end());
+    }
+
+    bool SimulatorEngine::isConfigSignalStateSafe(const IntersectionState &state) const
+    {
+        if (intersection_config.signal_groups.empty())
+        {
+            return true;
+        }
+
+        if (!checker.isConfigValid())
+        {
+            return false;
+        }
+
+        std::vector<SignalGroupId> active_groups = resolveActiveSignalGroups(state);
+        if (active_groups.empty())
+        {
+            return true;
+        }
+
+        return checker.areSignalGroupsConflictFree(active_groups);
     }
 
 } // namespace crossroads

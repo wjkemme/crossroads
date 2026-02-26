@@ -6,6 +6,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_TESTS "Build unit tests" ON)
 
+include(FetchContent)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
+find_package(SQLite3 QUIET)
+
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_executable(crossroads
@@ -15,10 +25,18 @@ add_executable(crossroads
     src/TrafficGenerator.cpp
     src/SimulatorEngine.cpp
     src/SimpleHttpUiServer.cpp
+    src/IntersectionConfigJson.cpp
+    src/db/Database.cpp
 )
+target_link_libraries(crossroads PRIVATE nlohmann_json::nlohmann_json)
+if(SQLite3_FOUND)
+    target_link_libraries(crossroads PRIVATE SQLite::SQLite3)
+    target_compile_definitions(crossroads PRIVATE CROSSROADS_USE_SQLITE=1)
+else()
+    message(WARNING "SQLite3 dev package not found. Falling back to file-backed config persistence.")
+endif()
 
 if(BUILD_TESTS)
-    include(FetchContent)
     FetchContent_Declare(
         Catch2
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
@@ -32,8 +50,9 @@ if(BUILD_TESTS)
         src/BasicLightController.cpp
         src/TrafficGenerator.cpp
         src/SimulatorEngine.cpp
+        src/IntersectionConfigJson.cpp
     )
-    target_link_libraries(test_safety PRIVATE Catch2::Catch2WithMain)
+    target_link_libraries(test_safety PRIVATE Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
     include(CTest)
     add_test(NAME safety_test COMMAND test_safety)
 endif()

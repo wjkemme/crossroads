@@ -6,6 +6,7 @@
 #include "TrafficGenerator.hpp"
 #include "SimulatorEngine.hpp"
 #include "TrafficLightControllers.hpp"
+#include "IntersectionConfigJson.hpp"
 
 using namespace crossroads;
 
@@ -507,4 +508,327 @@ TEST_CASE("SimulatorEngine snapshot JSON includes UI fields", "[engine][ui]")
     REQUIRE(json.find("\"lights\"") != std::string::npos);
     REQUIRE(json.find("\"lanes\"") != std::string::npos);
     REQUIRE(json.find("\"north\"") != std::string::npos);
+}
+
+TEST_CASE("SafetyChecker validates default configurable intersection", "[safety][config]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    SafetyChecker checker(config);
+    REQUIRE(checker.isConfigValid());
+}
+
+TEST_CASE("IntersectionConfig JSON roundtrip keeps key fields", "[config][json]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes[0].connected_to_intersection = true;
+    config.approaches[0].lanes[0].has_traffic_light = true;
+    config.approaches[0].lanes[1].connected_to_intersection = false;
+    config.approaches[0].lanes[1].has_traffic_light = false;
+    config.signal_groups = {
+        {1, "NS-straight", {laneIdFor(ApproachId::North, 0), laneIdFor(ApproachId::South, 0)}, {MovementType::Straight}, 9.0, 2.0}};
+
+    std::string json_text = intersectionConfigToJson(config);
+    ConfigParseResult parsed = intersectionConfigFromJson(json_text);
+
+    REQUIRE(parsed.ok);
+    REQUIRE(parsed.config.approaches[0].id == ApproachId::North);
+    REQUIRE(parsed.config.approaches[0].lanes.size() == 3);
+    REQUIRE(parsed.config.approaches[0].lanes[0].connected_to_intersection);
+    REQUIRE(parsed.config.approaches[0].lanes[0].has_traffic_light);
+    REQUIRE_FALSE(parsed.config.approaches[0].lanes[1].connected_to_intersection);
+    REQUIRE_FALSE(parsed.config.approaches[0].lanes[1].has_traffic_light);
+    REQUIRE_FALSE(parsed.config.lane_connections.empty());
+    REQUIRE(parsed.config.lane_connections[0].from_approach == ApproachId::North);
+    REQUIRE(parsed.config.signal_groups.size() == 1);
+    REQUIRE(parsed.config.signal_groups[0].controlled_lanes.size() == 2);
+}
+
+TEST_CASE("IntersectionConfig JSON parser rejects malformed structure", "[config][json]")
+{
+    std::string invalid_json = R"JSON({"approaches":[{"id":"north","lanes":[]}],"signal_groups":[]})JSON";
+    ConfigParseResult parsed = intersectionConfigFromJson(invalid_json);
+
+    REQUIRE_FALSE(parsed.ok);
+    REQUIRE_FALSE(parsed.errors.empty());
+}
+
+TEST_CASE("SafetyChecker rejects invalid lane configuration", "[safety][config]")
+{
+    IntersectionConfig invalid = makeDefaultIntersectionConfig();
+    invalid.approaches[0].lanes[0].allowed_movements.clear();
+
+    SafetyChecker checker(invalid);
+    REQUIRE_FALSE(checker.isConfigValid());
+}
+
+TEST_CASE("SafetyChecker movement conflict rules cover main corridors", "[safety][config]")
+{
+    SafetyChecker checker;
+
+    REQUIRE(checker.hasMovementConflict(ApproachId::North, MovementType::Straight,
+                                        ApproachId::East, MovementType::Straight));
+
+    REQUIRE_FALSE(checker.hasMovementConflict(ApproachId::North, MovementType::Straight,
+                                              ApproachId::South, MovementType::Straight));
+
+    REQUIRE(checker.hasMovementConflict(ApproachId::North, MovementType::Left,
+                                        ApproachId::South, MovementType::Left));
+}
+
+TEST_CASE("SimulatorEngine stores custom intersection config", "[engine][config]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes.push_back({12, "N-3", {MovementType::Left}, true});
+
+    SimulatorEngine engine(config, 0.5, 10.0, 10.0);
+    REQUIRE(engine.getIntersectionConfig().approaches[0].lanes.size() == 4);
+}
+
+TEST_CASE("SafetyChecker detects conflicting active signal groups", "[safety][config][signal-groups]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.signal_groups = {
+        {1, "NS-straight", {laneIdFor(ApproachId::North, 0), laneIdFor(ApproachId::South, 0)}, {MovementType::Straight}, 10.0, 2.0},
+        {2, "EW-straight", {laneIdFor(ApproachId::East, 0), laneIdFor(ApproachId::West, 0)}, {MovementType::Straight}, 10.0, 2.0}};
+
+    SafetyChecker checker(config);
+    REQUIRE(checker.isConfigValid());
+    REQUIRE_FALSE(checker.areSignalGroupsConflictFree({1, 2}));
+}
+
+TEST_CASE("SafetyChecker accepts non-conflicting active signal groups", "[safety][config][signal-groups]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.signal_groups = {
+        {1, "NS-straight", {laneIdFor(ApproachId::North, 0), laneIdFor(ApproachId::South, 0)}, {MovementType::Straight}, 10.0, 2.0}};
+
+    SafetyChecker checker(config);
+    REQUIRE(checker.isConfigValid());
+    REQUIRE(checker.areSignalGroupsConflictFree({1}));
+}
+
+TEST_CASE("SafetyChecker rejects unknown signal groups in active set", "[safety][config][signal-groups]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.signal_groups = {
+        {11, "NS-straight", {laneIdFor(ApproachId::North, 0), laneIdFor(ApproachId::South, 0)}, {MovementType::Straight}, 10.0, 2.0}};
+
+    SafetyChecker checker(config);
+    REQUIRE(checker.isConfigValid());
+    REQUIRE_FALSE(checker.areSignalGroupsConflictFree({99}));
+}
+
+TEST_CASE("SimulatorEngine enforces config signal-group conflicts at runtime", "[engine][config][signal-groups]")
+{
+    class OpposingNSGreenController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Green;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.signal_groups = {
+        {101, "N-left", {laneIdFor(ApproachId::North, 0)}, {MovementType::Left}, 8.0, 2.0},
+        {102, "S-left", {laneIdFor(ApproachId::South, 0)}, {MovementType::Left}, 8.0, 2.0}};
+
+    SimulatorEngine engine(config, 0.5, 10.0, 10.0);
+    engine.setController(std::make_unique<OpposingNSGreenController>(), SimulatorEngine::ControlMode::Basic);
+
+    engine.start();
+    engine.tick(0.1);
+
+    REQUIRE(engine.getControlMode() == SimulatorEngine::ControlMode::NullControl);
+    REQUIRE(engine.getMetrics().safety_violations >= 1);
+}
+
+TEST_CASE("ConfigurableSignalGroupController cycles green and orange per group", "[controller][config]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.signal_groups = {
+        {1, "North straight", {laneIdFor(ApproachId::North, 0)}, {MovementType::Straight}, 1.0, 0.5},
+        {2, "East right", {laneIdFor(ApproachId::East, 2)}, {MovementType::Right}, 1.0, 0.5}};
+
+    ConfigurableSignalGroupController ctrl(config);
+
+    auto s = ctrl.getCurrentState();
+    REQUIRE(s.north == LightState::Green);
+    REQUIRE(s.turnEastNorth == LightState::Red);
+
+    ctrl.tick(1.0);
+    s = ctrl.getCurrentState();
+    REQUIRE(s.north == LightState::Orange);
+
+    ctrl.tick(0.5);
+    s = ctrl.getCurrentState();
+    REQUIRE(s.north == LightState::Red);
+    REQUIRE(s.turnEastNorth == LightState::Green);
+}
+
+TEST_CASE("SimulatorEngine uses configurable controller for signal-group config", "[engine][config][controller]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.signal_groups = {
+        {9, "North straight", {laneIdFor(ApproachId::North, 0)}, {MovementType::Straight}, 1.0, 0.5},
+        {10, "South straight", {laneIdFor(ApproachId::South, 0)}, {MovementType::Straight}, 1.0, 0.5}};
+
+    SimulatorEngine engine(config, 0.1, 10.0, 10.0);
+    engine.start();
+
+    auto s = engine.getCurrentLightState();
+    REQUIRE(s.north == LightState::Green);
+    REQUIRE(s.south == LightState::Red);
+
+    engine.tick(1.1);
+    s = engine.getCurrentLightState();
+    REQUIRE(s.north == LightState::Orange);
+}
+
+TEST_CASE("TrafficGenerator assigns movement intent from lane config", "[traffic][config][movement]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {100, "N-mixed", {MovementType::Straight, MovementType::Right}, true},
+        {101, "N-left", {MovementType::Left}, true}};
+
+    TrafficGenerator gen(config, 2.0);
+    gen.generateTraffic(1.0, 0.0);
+
+    const auto &north_queue = gen.getQueueByDirection(Direction::North);
+    REQUIRE_FALSE(north_queue.empty());
+
+    for (const auto &vehicle : north_queue)
+    {
+        REQUIRE((vehicle.movement == MovementType::Straight ||
+                 vehicle.movement == MovementType::Right ||
+                 vehicle.movement == MovementType::Left));
+        REQUIRE((vehicle.turning == (vehicle.movement != MovementType::Straight)));
+    }
+}
+
+TEST_CASE("TrafficGenerator propagates lane config flags to vehicles", "[traffic][config][lane]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[1].lanes = {
+        {200, "E-fixed", {MovementType::Straight}, false}};
+
+    TrafficGenerator gen(config, 2.0);
+    gen.generateTraffic(1.0, 0.0);
+
+    const auto &east_queue = gen.getQueueByDirection(Direction::East);
+    REQUIRE_FALSE(east_queue.empty());
+    for (const auto &vehicle : east_queue)
+    {
+        REQUIRE(vehicle.lane_id == 200);
+        REQUIRE_FALSE(vehicle.lane_change_allowed);
+        REQUIRE(vehicle.movement == MovementType::Straight);
+    }
+}
+
+TEST_CASE("TrafficGenerator skips disconnected lanes for configured spawns", "[traffic][config][connectivity]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {700, "N-disconnected", {MovementType::Straight}, true, false, true},
+        {701, "N-connected", {MovementType::Straight}, true, true, true}};
+
+    TrafficGenerator gen(config, 2.0);
+    gen.generateTraffic(1.0, 0.0);
+
+    const auto &north_queue = gen.getQueueByDirection(Direction::North);
+    REQUIRE_FALSE(north_queue.empty());
+    for (const auto &vehicle : north_queue)
+    {
+        REQUIRE(vehicle.lane_id == 701);
+    }
+}
+
+TEST_CASE("TrafficGenerator changes to preferred right lane early", "[traffic][lane-change]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {300, "N-left", {MovementType::Left}, true},
+        {301, "N-straight", {MovementType::Straight}, true},
+        {302, "N-right", {MovementType::Right}, true}};
+
+    TrafficGenerator gen(config, 1.0);
+    auto &north = gen.getQueueByDirection(Direction::North);
+
+    Vehicle v1(1, Direction::North, 0.0);
+    v1.lane_id = 300;
+    v1.queue_index = 0;
+    v1.movement = MovementType::Right;
+    v1.turning = true;
+    v1.lane_change_allowed = true;
+    v1.position_in_lane = 10.0;
+    north.push_back(v1);
+
+    std::array<bool, 4> can_move = {false, false, false, false};
+    gen.updateVehicleSpeeds(0.1, can_move);
+
+    REQUIRE(north.front().lane_id == 302);
+    REQUIRE(north.front().movement == MovementType::Right);
+    REQUIRE(north.front().turning == true);
+}
+
+TEST_CASE("TrafficGenerator falls back to straight when lane change unavailable", "[traffic][lane-change]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {400, "N-left", {MovementType::Left}, false},
+        {401, "N-straight", {MovementType::Straight}, false}};
+
+    TrafficGenerator gen(config, 1.0);
+    auto &north = gen.getQueueByDirection(Direction::North);
+
+    Vehicle v1(2, Direction::North, 0.0);
+    v1.lane_id = 400;
+    v1.queue_index = 0;
+    v1.movement = MovementType::Right;
+    v1.turning = true;
+    v1.lane_change_allowed = false;
+    v1.position_in_lane = 15.0;
+    north.push_back(v1);
+
+    std::array<bool, 4> can_move = {false, false, false, false};
+    gen.updateVehicleSpeeds(0.1, can_move);
+
+    REQUIRE(north.front().movement == MovementType::Straight);
+    REQUIRE(north.front().turning == false);
+}
+
+TEST_CASE("TrafficGenerator resolves vehicle destination from lane connections", "[traffic][config][routing]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {500, "N-only-right", {MovementType::Right}, true}};
+    config.approaches[1].lanes = {
+        {600, "E-0", {MovementType::Straight}, true},
+        {601, "E-1", {MovementType::Straight}, true}};
+    config.lane_connections.clear();
+    config.lane_connections.push_back({ApproachId::North, 0, MovementType::Right, ApproachId::East, 1});
+
+    TrafficGenerator gen(config, 2.0);
+    gen.generateTraffic(1.0, 0.0);
+
+    const auto &north = gen.getQueueByDirection(Direction::North);
+    REQUIRE_FALSE(north.empty());
+    for (const auto &vehicle : north)
+    {
+        REQUIRE(vehicle.movement == MovementType::Right);
+        REQUIRE(vehicle.destination_approach == ApproachId::East);
+        REQUIRE(vehicle.destination_lane_index == 1);
+        REQUIRE(vehicle.destination_lane_id == laneIdFor(ApproachId::East, 1));
+    }
 }

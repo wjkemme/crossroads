@@ -6,6 +6,7 @@
 #include <array>
 #include "Vehicle.hpp"
 #include "Intersection.hpp"
+#include "IntersectionConfig.hpp"
 
 // Add these constants after the class declaration begins:
 static constexpr double VEHICLE_SPACING = 5.0; // meters
@@ -23,12 +24,19 @@ namespace crossroads
         double crossing_time = -1.0;
         double crossing_duration = 0.0;
         uint8_t queue_index = 0; // 0 or 1 for straight, 2 for turn
+        uint16_t lane_id = 0;
+        MovementType movement = MovementType::Straight;
+        ApproachId destination_approach = ApproachId::North;
+        uint16_t destination_lane_index = 0;
+        LaneId destination_lane_id = 0;
+        bool lane_change_allowed = true;
     };
 
     class TrafficGenerator
     {
     public:
         TrafficGenerator(double arrival_rate = 0.5); // vehicles per second, per lane
+        TrafficGenerator(const IntersectionConfig &config, double arrival_rate = 0.5);
 
         // Generate new vehicles for given time step and add them to appropriate lane queues
         void generateTraffic(double dt_seconds, double current_time);
@@ -69,6 +77,19 @@ namespace crossroads
         const std::deque<Vehicle> &getQueueByDirection(Direction dir) const;
 
     private:
+        const ApproachConfig *getApproachConfig(Direction dir) const;
+        bool laneAllowsMovement(const LaneConfig &lane, MovementType movement) const;
+        const LaneConnectionConfig *findLaneConnection(ApproachId from_approach, uint16_t from_lane_index, MovementType movement) const;
+        bool resolveVehicleRoute(Vehicle &vehicle, ApproachId from_approach, uint16_t from_lane_index, MovementType movement) const;
+        size_t chooseSpawnMovementIndex(const std::vector<MovementType> &movements, uint32_t vehicle_id) const;
+        size_t choosePreferredLaneIndex(const ApproachConfig &approach, MovementType movement, size_t current_index) const;
+        void maybeApplyLaneChanges(Direction dir, std::deque<Vehicle> &queue);
+        bool hasSafeGapForLaneChange(const std::deque<Vehicle> &queue, size_t vehicle_index, LaneId target_lane_id) const;
+
+        IntersectionConfig intersection_config;
+        bool use_configured_spawns = false;
+        std::array<size_t, 4> spawn_lane_cursor{};
+
         double arrival_rate;      // vehicles per second per lane
         double time_accumulated;  // accumulated time for next spawn calculation
         uint32_t next_vehicle_id; // counter for unique IDs

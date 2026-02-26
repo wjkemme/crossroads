@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include "IntersectionConfig.hpp"
 
 namespace crossroads
 {
@@ -24,11 +25,20 @@ namespace crossroads
         double position_in_lane; // meters from queue start
         bool turning;            // true when vehicle uses turn lane
         uint8_t queue_index;     // 0 or 1 for straight lanes, 2 for turn lane
+        LaneId lane_id;          // future-proof configurable lane id
+        MovementType movement;   // planned movement for configurable routing
+        ApproachId destination_approach;
+        uint16_t destination_lane_index;
+        LaneId destination_lane_id;
+        bool lane_change_allowed;
 
         Vehicle(uint32_t vid, Direction lane, double arrival)
             : id(vid), entry_lane(lane), arrival_time(arrival),
               crossing_time(-1.0), exit_time(-1.0),
-              current_speed(0.0), position_in_lane(0.0), turning(false), queue_index(0) {}
+              current_speed(0.0), position_in_lane(0.0), turning(false), queue_index(0),
+              lane_id(0), movement(MovementType::Straight),
+              destination_approach(ApproachId::North), destination_lane_index(0), destination_lane_id(0),
+              lane_change_allowed(true) {}
 
         bool isWaiting() const { return crossing_time < 0.0; }
         bool isCrossing() const { return crossing_time >= 0.0 && exit_time < 0.0; }

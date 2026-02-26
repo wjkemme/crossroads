@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Intersection.hpp"
+#include "IntersectionConfig.hpp"
 
 namespace crossroads
 {
@@ -8,11 +9,16 @@ namespace crossroads
     class SafetyChecker
     {
     public:
-        SafetyChecker() = default;
+        SafetyChecker();
+        explicit SafetyChecker(const IntersectionConfig &config);
 
         // Public validation methods
         bool isSafe(const IntersectionState &state) const;
         bool isValidTransition(const IntersectionState &prev, const IntersectionState &next, double dt_seconds) const;
+        bool isConfigValid() const;
+        bool hasMovementConflict(ApproachId from_a, MovementType move_a,
+                                 ApproachId from_b, MovementType move_b) const;
+        bool areSignalGroupsConflictFree(const std::vector<SignalGroupId> &active_group_ids) const;
 
         static constexpr double ORANGE_DURATION = 2.0; // seconds
 
@@ -26,6 +32,14 @@ namespace crossroads
         bool checkOrangeTiming(const IntersectionState &prev, const IntersectionState &next, double dt_seconds) const;
         bool checkCrossingLightSafety(const IntersectionState &prev, const IntersectionState &next) const;
         bool checkTurningLightTransitions(const IntersectionState &next) const;
+
+        bool validateConfig(const IntersectionConfig &config) const;
+        static ApproachId destinationFor(ApproachId from, MovementType movement);
+        static bool isInNorthSouthCorridor(ApproachId from, MovementType movement);
+        bool tryFindApproachForLane(LaneId lane_id, ApproachId &approach) const;
+
+        IntersectionConfig intersection_config;
+        bool config_valid = false;
     };
 
 } // namespace crossroads

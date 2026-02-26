@@ -1,0 +1,773 @@
+:root {
+    color-scheme: dark;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    background: #111827;
+    color: #e5e7eb;
+}
+
+.wrap {
+    max-width: 1160px;
+    margin: 20px auto;
+    padding: 0 16px;
+}
+
+.row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.card {
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 10px;
+    padding: 12px;
+}
+
+.kpi {
+    min-width: 180px;
+}
+
+button {
+    background: #2563eb;
+    color: white;
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #1d4ed8;
+}
+
+.small {
+    font-size: 12px;
+    color: #9ca3af;
+}
+
+.road-wrap {
+    margin-top: 14px;
+    position: relative;
+    height: 620px;
+    border-radius: 14px;
+    border: 1px solid #374151;
+    background: #0f172a;
+    overflow: visible;
+}
+
+.road-h {
+    display: none;
+}
+
+.road-v {
+    display: none;
+}
+
+.junction {
+    position: absolute;
+    width: 100px;
+    height: 100px;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(15, 23, 42, 0.34);
+    border: 2px dashed #334155;
+    z-index: 8;
+}
+
+.center-line-h {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 2px;
+    transform: translateY(-1px);
+    background: #fbbf24;
+    z-index: 10;
+}
+
+.center-line-v {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-1px);
+    background: #fbbf24;
+    z-index: 10;
+}
+
+.center-line-seg-h,
+.center-line-seg-v {
+    position: absolute;
+    background: #fbbf24;
+    z-index: 4;
+    pointer-events: none;
+}
+
+.median-h,
+.median-v {
+    position: absolute;
+    pointer-events: none;
+    z-index: 3;
+    background: #14532d;
+}
+
+.median-h {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 8px;
+    transform: translateY(-4px);
+}
+
+.median-v {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 8px;
+    transform: translateX(-4px);
+}
+
+.center-line-seg-h,
+.center-line-seg-v {
+    display: none;
+}
+
+.center-line-seg-h {
+    height: 2px;
+}
+
+.center-line-seg-v {
+    width: 2px;
+}
+
+.lane {
+    position: absolute;
+    background: transparent;
+    border: 0;
+    overflow: visible;
+    z-index: 2;
+}
+
+.lane-body-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.lane-body-segment {
+    position: absolute;
+    background: rgba(148, 163, 184, 0.10);
+    border-color: rgba(148, 163, 184, 0.2);
+    border-style: solid;
+    border-width: 0;
+    box-sizing: border-box;
+}
+
+.lane-disabled-mask {
+    position: absolute;
+    background: rgba(51, 65, 85, 0.55);
+    border: 1px solid rgba(100, 116, 139, 0.45);
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Main lanes: 2 straight + 1 turn lane (48px total, 16px each) */
+.lane.west-east {
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 48px;
+}
+
+.lane.east-west {
+    left: 0;
+    right: 0;
+    top: calc(50% - 48px);
+    height: 48px;
+}
+
+.lane.north-south {
+    top: 0;
+    bottom: 0;
+    left: calc(50% - 48px);
+    width: 48px;
+}
+
+.lane.south-north {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 48px;
+}
+
+/* Separate uitvoeg/invoeg elements no longer needed - integrated in 48px lane */
+/* Uitvoeg/invoeg CSS no longer needed - integrated into 48px lanes */
+
+.stop-line {
+    position: absolute;
+    display: none;
+    background: #f8fafc;
+    opacity: 1;
+    z-index: 12;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.55);
+}
+
+.stop-line.west-east {
+    left: calc(50% - 72px);
+    top: 50%;
+    width: 3px;
+    height: 48px;
+}
+
+.stop-line.east-west {
+    left: calc(50% + 70px);
+    top: calc(50% - 48px);
+    width: 3px;
+    height: 48px;
+}
+
+.stop-line.north-south {
+    left: calc(50% - 48px);
+    top: calc(50% - 72px);
+    width: 48px;
+    height: 3px;
+}
+
+.stop-line.south-north {
+    left: 50%;
+    top: calc(50% + 70px);
+    width: 48px;
+    height: 3px;
+}
+
+.stop-line-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 12;
+}
+
+.dyn-stop-line {
+    position: absolute;
+    background: #f8fafc;
+    opacity: 1;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.55);
+}
+
+.dyn-stop-line.no-signal {
+    opacity: 0.75;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.35);
+}
+
+.junction-route-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 11;
+}
+
+.junction-route-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.route-path {
+    fill: none;
+    stroke: rgba(226, 232, 240, 0.55);
+    stroke-width: 1.2;
+    stroke-dasharray: 5 6;
+    stroke-linecap: round;
+}
+
+.route-path.turn {
+    stroke: rgba(251, 191, 36, 0.7);
+    stroke-dasharray: 4 5;
+}
+
+.junction-lane-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 13;
+}
+
+.junction-lane-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    filter: drop-shadow(0 0 2px rgba(15, 23, 42, 0.65));
+}
+
+.junction-lane-border {
+    fill: none;
+    stroke: rgba(248, 250, 252, 0.95);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.junction-lane-fill {
+    fill: none;
+    stroke: rgba(100, 116, 139, 0.9);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.turn-boundary {
+    fill: none;
+    stroke: rgba(248, 250, 252, 0.95);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    filter: drop-shadow(0 0 1px rgba(15, 23, 42, 0.8));
+}
+
+.turn-boundary.solid {
+    stroke-dasharray: none;
+}
+
+.turn-boundary.dashed {
+    stroke: rgba(226, 232, 240, 0.9);
+    stroke-dasharray: 5 5;
+}
+
+.turn-emphasis {
+    display: none;
+}
+
+/* No turn-cut needed anymore - slip roads are separate */
+
+.dir-arrow {
+    position: absolute;
+    color: #93c5fd;
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    opacity: 0.85;
+    user-select: none;
+    pointer-events: none;
+}
+
+.arrow-we {
+    left: calc(50% - 150px);
+    top: calc(50% + 12px);
+}
+
+.arrow-ew {
+    left: calc(50% + 70px);
+    top: calc(50% - 32px);
+}
+
+.arrow-ns {
+    left: calc(50% - 32px);
+    top: calc(50% - 150px);
+}
+
+.arrow-sn {
+    left: calc(50% + 12px);
+    top: calc(50% + 70px);
+}
+
+.approach-signal {
+    position: absolute;
+    width: 11px;
+    height: 11px;
+    border-radius: 999px;
+    border: 2px solid #cbd5e1;
+    background: #374151;
+    z-index: 6;
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9);
+}
+
+.approach-signal.green {
+    background: #22c55e;
+    border-color: #bbf7d0;
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9), 0 0 10px rgba(34, 197, 94, 0.85);
+}
+
+.approach-signal.orange {
+    background: #f59e0b;
+    border-color: #fde68a;
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9), 0 0 10px rgba(245, 158, 11, 0.85);
+}
+
+.approach-signal.red {
+    background: #ef4444;
+    border-color: #fecaca;
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9), 0 0 8px rgba(239, 68, 68, 0.65);
+}
+
+.approach-signal,
+.lane-arrow {
+    display: none;
+}
+
+.dynamic-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 8;
+}
+
+.road-overlay {
+    display: none;
+}
+
+.road-segment {
+    display: none;
+}
+
+.dyn-signal {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #374151;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9);
+}
+
+.dyn-signal.green {
+    background: #22c55e;
+    border-color: #bbf7d0;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9), 0 0 8px rgba(34, 197, 94, 0.85);
+}
+
+.dyn-signal.orange {
+    background: #f59e0b;
+    border-color: #fde68a;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9), 0 0 8px rgba(245, 158, 11, 0.85);
+}
+
+.dyn-signal.red {
+    background: #ef4444;
+    border-color: #fecaca;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9), 0 0 6px rgba(239, 68, 68, 0.65);
+}
+
+.dyn-arrow {
+    position: absolute;
+    color: #bfdbfe;
+    font-size: 13px;
+    font-weight: 700;
+    text-shadow: 0 0 6px rgba(15, 23, 42, 1);
+}
+
+.dyn-arrow.turn {
+    color: #fbbf24;
+    font-size: 14px;
+}
+
+/* 3 signals per direction (2 straight + 1 turn) */
+.sig-north-0 {
+    left: calc(50% - 48px);
+    top: calc(50% - 68px);
+}
+
+.sig-north-1 {
+    left: calc(50% - 32px);
+    top: calc(50% - 68px);
+}
+
+.sig-north-2 {
+    left: calc(50% - 16px);
+    top: calc(50% - 68px);
+}
+
+.sig-south-0 {
+    left: calc(50% + 4px);
+    top: calc(50% + 56px);
+}
+
+.sig-south-1 {
+    left: calc(50% + 20px);
+    top: calc(50% + 56px);
+}
+
+.sig-south-2 {
+    left: calc(50% + 36px);
+    top: calc(50% + 56px);
+}
+
+.sig-west-0 {
+    left: calc(50% - 68px);
+    top: calc(50% + 4px);
+}
+
+.sig-west-1 {
+    left: calc(50% - 68px);
+    top: calc(50% + 20px);
+}
+
+.sig-west-2 {
+    left: calc(50% - 68px);
+    top: calc(50% + 36px);
+}
+
+.sig-east-0 {
+    left: calc(50% + 56px);
+    top: calc(50% - 48px);
+}
+
+.sig-east-1 {
+    left: calc(50% + 56px);
+    top: calc(50% - 32px);
+}
+
+.sig-east-2 {
+    left: calc(50% + 56px);
+    top: calc(50% - 16px);
+}
+
+.lane::before,
+.lane::after {
+    display: none;
+}
+
+.lane-separator {
+    position: absolute;
+    pointer-events: none;
+    z-index: 9;
+}
+
+.lane-separator.horizontal.outer {
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: rgba(248, 250, 252, 0.9);
+}
+
+.lane-separator.vertical.outer {
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(248, 250, 252, 0.9);
+}
+
+.lane-separator.horizontal.inner {
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: repeating-linear-gradient(to right,
+            rgba(226, 232, 240, 0.8) 0 5px,
+            transparent 5px 10px);
+}
+
+.lane-separator.vertical.inner {
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: repeating-linear-gradient(to bottom,
+            rgba(226, 232, 240, 0.8) 0 5px,
+            transparent 5px 10px);
+}
+
+.lane-separator.junction-guide {
+    opacity: 0.4;
+}
+
+.lane-separator.junction-guide.connector {
+    opacity: 0.95;
+}
+
+.lane-label {
+    position: absolute;
+    font-size: 11px;
+    color: #94a3b8;
+    background: rgba(15, 23, 42, 0.65);
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+
+.lbl-we {
+    left: 12px;
+    top: calc(50% + 52px);
+}
+
+.lbl-ew {
+    right: 12px;
+    top: calc(50% - 68px);
+}
+
+.lbl-ns {
+    left: calc(50% - 220px);
+    top: 12px;
+}
+
+.lbl-sn {
+    left: calc(50% + 116px);
+    bottom: 12px;
+}
+
+.route-debug {
+    position: absolute;
+    right: -280px;
+    bottom: 10px;
+    width: 310px;
+    max-height: 210px;
+    overflow: auto;
+    z-index: 20;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    background: rgba(15, 23, 42, 0.9);
+    padding: 8px;
+    font-size: 11px;
+    color: #cbd5e1;
+    box-shadow: 0 6px 16px rgba(2, 6, 23, 0.45);
+}
+
+.route-debug-title {
+    font-size: 11px;
+    color: #93c5fd;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.route-debug-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.route-debug-row {
+    white-space: nowrap;
+}
+
+.lane-arrow {
+    position: absolute;
+    color: #bfdbfe;
+    font-size: 13px;
+    font-weight: 700;
+    z-index: 7;
+    user-select: none;
+    pointer-events: none;
+    text-shadow: 0 0 6px rgba(15, 23, 42, 1);
+}
+
+.turn-arrow {
+    color: #fbbf24;
+    font-size: 14px;
+}
+
+/* Arrow positions: centered in each 16px lane (3 lanes per direction) */
+/* W->E: lane top=50%, lanes at +8px, +24px, +40px */
+.arr-we-1 {
+    left: calc(50% - 100px);
+    top: calc(50% + 4px);
+}
+
+.arr-we-2 {
+    left: calc(50% - 100px);
+    top: calc(50% + 20px);
+}
+
+.arr-we-t {
+    left: calc(50% - 100px);
+    top: calc(50% + 36px);
+}
+
+/* E->W: lane top=50%-48px, lanes at -40px, -24px, -8px */
+.arr-ew-t {
+    left: calc(50% + 80px);
+    top: calc(50% - 44px);
+}
+
+.arr-ew-1 {
+    left: calc(50% + 80px);
+    top: calc(50% - 28px);
+}
+
+.arr-ew-2 {
+    left: calc(50% + 80px);
+    top: calc(50% - 12px);
+}
+
+/* N->S: lane left=50%-48px, lanes at -40px, -24px, -8px */
+.arr-ns-t {
+    left: calc(50% - 44px);
+    top: calc(50% - 100px);
+}
+
+.arr-ns-1 {
+    left: calc(50% - 28px);
+    top: calc(50% - 100px);
+}
+
+.arr-ns-2 {
+    left: calc(50% - 12px);
+    top: calc(50% - 100px);
+}
+
+/* S->N: lane left=50%, lanes at +8px, +24px, +40px */
+.arr-sn-1 {
+    left: calc(50% + 4px);
+    top: calc(50% + 80px);
+}
+
+.arr-sn-2 {
+    left: calc(50% + 20px);
+    top: calc(50% + 80px);
+}
+
+.arr-sn-t {
+    left: calc(50% + 36px);
+    top: calc(50% + 80px);
+}
+
+.car {
+    position: absolute;
+    width: 12px;
+    height: 7px;
+    border-radius: 2px;
+    background: #60a5fa;
+    box-shadow: 0 0 0 2px rgba(30, 41, 59, 0.9);
+    overflow: hidden;
+}
+
+.car.crossing {
+    background: #a78bfa;
+}
+
+.car.turning {
+    animation: turnBlink 0.7s linear infinite;
+}
+
+.turn-side {
+    position: absolute;
+    top: 0;
+    width: 4px;
+    height: 100%;
+    background: #f59e0b;
+}
+
+.turn-side.left {
+    left: 0;
+}
+
+.turn-side.right {
+    right: 0;
+}
+
+@keyframes turnBlink {
+    0% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.45;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}

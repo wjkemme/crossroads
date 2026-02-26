@@ -3,9 +3,11 @@
 #include "SafetyChecker.hpp"
 #include "TrafficGenerator.hpp"
 #include "TrafficLightControllers.hpp"
+#include "IntersectionConfig.hpp"
 #include <array>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace crossroads
 {
@@ -48,6 +50,10 @@ namespace crossroads
         SimulatorEngine(double traffic_rate = 0.5,
                         double ns_duration = 10.0,
                         double ew_duration = 10.0);
+        SimulatorEngine(const IntersectionConfig &intersection_config,
+                        double traffic_rate,
+                        double ns_duration,
+                        double ew_duration);
 
         void simulate(double duration_seconds, double time_step = 0.1);
         void tick(double dt);
@@ -63,6 +69,7 @@ namespace crossroads
         void setControlMode(ControlMode mode);
         ControlMode getControlMode() const;
         void setController(std::unique_ptr<ITrafficLightController> custom_controller, ControlMode mode);
+        const IntersectionConfig &getIntersectionConfig() const;
 
     private:
         void generateTraffic(double dt);
@@ -70,6 +77,8 @@ namespace crossroads
         void completeVehicleCrossings();
         void advanceController(double dt);
         bool isLightGreen(Direction dir) const;
+        std::vector<SignalGroupId> resolveActiveSignalGroups(const IntersectionState &state) const;
+        bool isConfigSignalStateSafe(const IntersectionState &state) const;
 
         SafetyChecker checker;
         std::unique_ptr<ITrafficLightController> controller;
@@ -77,6 +86,7 @@ namespace crossroads
         TrafficGenerator traffic;
         double ns_duration;
         double ew_duration;
+        IntersectionConfig intersection_config;
         double current_time = 0.0;
         bool running = false;
         size_t safety_violations = 0;
