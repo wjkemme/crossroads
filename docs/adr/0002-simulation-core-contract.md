@@ -20,6 +20,8 @@ De simulatiecore blijft deterministic en tick-gedreven:
 ## Core regels
 - Light-transities volgen toegestaan pad (incl. orange duur).
 - Safety-check loopt als guard op controller-uitvoer.
+- Safety-regels mogen geen layout/routinggedrag muteren: wegstructuur, lane-connections en toegestane bewegingen komen uitsluitend uit configuratie.
+- Verkeersgedrag gebruikt die configuratie als bron van waarheid; safety valideert alleen lichttoestanden en transities.
 - Snapshot is immutabel voor clients; wijzigingen alleen via commando's/config update.
 
 ## Alternatieven

@@ -9,12 +9,22 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 namespace crossroads
 {
     namespace
     {
+        void configureClientSocketTimeouts(int client_fd)
+        {
+            timeval timeout{};
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
+            setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        }
+
         std::string decodePath(const std::string &path)
         {
             if (path == "/" || path == "/index.html")
@@ -61,6 +71,49 @@ namespace crossroads
 
         std::string extractCmd(const std::string &path)
         {
+            auto fromHex = [](char c) -> int
+            {
+                if (c >= '0' && c <= '9')
+                    return c - '0';
+                if (c >= 'a' && c <= 'f')
+                    return 10 + (c - 'a');
+                if (c >= 'A' && c <= 'F')
+                    return 10 + (c - 'A');
+                return -1;
+            };
+
+            auto urlDecode = [&](const std::string &text) -> std::string
+            {
+                std::string decoded;
+                decoded.reserve(text.size());
+
+                for (std::size_t i = 0; i < text.size(); ++i)
+                {
+                    const char ch = text[i];
+                    if (ch == '+')
+                    {
+                        decoded.push_back(' ');
+                        continue;
+                    }
+
+                    if (ch == '%' && i + 2 < text.size())
+                    {
+                        const int hi = fromHex(text[i + 1]);
+                        const int lo = fromHex(text[i + 2]);
+                        if (hi >= 0 && lo >= 0)
+                        {
+                            decoded.push_back(static_cast<char>((hi << 4) | lo));
+                            i += 2;
+                            continue;
+                        }
+                    }
+
+                    decoded.push_back(ch);
+                }
+
+                return decoded;
+            };
+
             std::size_t q = path.find("cmd=");
             if (q == std::string::npos)
             {
@@ -72,7 +125,7 @@ namespace crossroads
             {
                 cmd = cmd.substr(0, amp);
             }
-            return cmd;
+            return urlDecode(cmd);
         }
 
         std::string readFileIfExists(const std::string &path)
@@ -235,8 +288,12 @@ namespace crossroads
                 break;
             }
 
-            handleClient(client_fd);
-            close(client_fd);
+            std::thread([this, client_fd]()
+                        {
+                            configureClientSocketTimeouts(client_fd);
+                            handleClient(client_fd);
+                            close(client_fd); })
+                .detach();
         }
     }
 

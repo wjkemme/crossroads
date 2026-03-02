@@ -5,6 +5,7 @@
 #include "IntersectionConfig.hpp"
 
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 #include <vector>
 
@@ -17,6 +18,9 @@ namespace crossroads
         virtual void tick(double dt_seconds) = 0;
         virtual IntersectionState getCurrentState() const = 0;
         virtual void reset() = 0;
+        virtual void setDemandByDirection(const std::array<bool, 4> &)
+        {
+        }
     };
 
     class BasicControllerAdapter : public ITrafficLightController
@@ -40,6 +44,11 @@ namespace crossroads
         void reset() override
         {
             basic_controller.reset();
+        }
+
+        void setDemandByDirection(const std::array<bool, 4> &demand) override
+        {
+            basic_controller.setDemandByDirection(demand);
         }
 
     private:
@@ -90,6 +99,10 @@ namespace crossroads
             state.turnNorthWest = active;
             state.turnWestSouth = active;
             state.turnEastNorth = active;
+            state.turnNorthEast = active;
+            state.turnSouthWest = active;
+            state.turnEastSouth = active;
+            state.turnWestNorth = active;
         }
 
         IntersectionState state{};
@@ -205,6 +218,25 @@ namespace crossroads
                     return;
                 case ApproachId::West:
                     s.turnWestSouth = color;
+                    return;
+                }
+            }
+
+            if (movement == MovementType::Left)
+            {
+                switch (approach)
+                {
+                case ApproachId::North:
+                    s.turnNorthEast = color;
+                    return;
+                case ApproachId::East:
+                    s.turnEastSouth = color;
+                    return;
+                case ApproachId::South:
+                    s.turnSouthWest = color;
+                    return;
+                case ApproachId::West:
+                    s.turnWestNorth = color;
                     return;
                 }
             }

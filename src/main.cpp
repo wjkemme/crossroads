@@ -6,6 +6,9 @@
 #include <thread>
 #include <optional>
 #include <vector>
+#include <sstream>
+#include <algorithm>
+#include <cctype>
 #include "SimulatorEngine.hpp"
 #include "SimpleHttpUiServer.hpp"
 #include "IntersectionConfigJson.hpp"
@@ -30,9 +33,10 @@ int main()
     std::cout << "=== Crossroads Traffic Simulator UI ===" << std::endl;
     std::cout << std::endl;
 
-    constexpr double kTrafficRate = 0.8;
+    constexpr double kDefaultTrafficRate = 0.8;
     constexpr double kNorthSouthDuration = 10.0;
     constexpr double kEastWestDuration = 10.0;
+    double traffic_rate = kDefaultTrafficRate;
 
     crossroads::db::Database database("crossroads.db");
     std::string db_error;
@@ -64,10 +68,11 @@ int main()
         database.saveActiveIntersectionConfigJson(crossroads::intersectionConfigToJson(initial_config), &db_error);
     }
 
-    crossroads::SimulatorEngine engine(initial_config, kTrafficRate, kNorthSouthDuration, kEastWestDuration);
+    crossroads::SimulatorEngine engine(initial_config, traffic_rate, kNorthSouthDuration, kEastWestDuration);
     std::mutex engine_mutex;
     std::atomic<bool> app_running{true};
     std::optional<crossroads::IntersectionConfig> pending_config;
+    std::optional<crossroads::TrafficGenerator::SpawnLaneFilter> active_spawn_filter;
 
     crossroads::SimpleHttpUiServer server(
         8080,
@@ -86,7 +91,9 @@ int main()
                 {
                     return;
                 }
-                engine = crossroads::SimulatorEngine(*pending_config, kTrafficRate, kNorthSouthDuration, kEastWestDuration);
+                engine = crossroads::SimulatorEngine(*pending_config, traffic_rate, kNorthSouthDuration, kEastWestDuration);
+                engine.setTrafficRate(traffic_rate);
+                engine.setSpawnLaneFilter(active_spawn_filter);
                 pending_config.reset();
             };
 
@@ -107,6 +114,85 @@ int main()
             }
             else if (cmd == "step")
                 engine.handleCommand(crossroads::SimulatorEngine::UICommand::Step, 0.1);
+            else if (cmd == "spawn_focus:all")
+            {
+                const bool was_running = engine.isRunning();
+                active_spawn_filter.reset();
+                engine.setSpawnLaneFilter(active_spawn_filter);
+                engine.handleCommand(crossroads::SimulatorEngine::UICommand::Reset);
+                if (was_running)
+                {
+                    engine.handleCommand(crossroads::SimulatorEngine::UICommand::Start);
+                }
+            }
+            else if (cmd.rfind("spawn_focus:", 0) == 0)
+            {
+                const std::string payload = cmd.substr(std::string("spawn_focus:").size());
+                std::istringstream parser(payload);
+                std::string approach_text;
+                std::string lane_text;
+                if (std::getline(parser, approach_text, ':') && std::getline(parser, lane_text))
+                {
+                    auto normalizeToken = [](std::string value)
+                    {
+                        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch)
+                                                                { return !std::isspace(ch); }));
+                        value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char ch)
+                                                 { return !std::isspace(ch); })
+                                        .base(),
+                                    value.end());
+                        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch)
+                                       { return static_cast<char>(std::tolower(ch)); });
+                        return value;
+                    };
+
+                    approach_text = normalizeToken(approach_text);
+                    lane_text = normalizeToken(lane_text);
+
+                    crossroads::ApproachId approach = crossroads::ApproachId::North;
+                    if (approach_text == "east")
+                        approach = crossroads::ApproachId::East;
+                    else if (approach_text == "south")
+                        approach = crossroads::ApproachId::South;
+                    else if (approach_text == "west")
+                        approach = crossroads::ApproachId::West;
+
+                    try
+                    {
+                        int lane_index_raw = std::stoi(lane_text);
+                        if (lane_index_raw >= 0)
+                        {
+                            const bool was_running = engine.isRunning();
+                            crossroads::TrafficGenerator::SpawnLaneFilter filter;
+                            filter.approach = approach;
+                            filter.lane_index = static_cast<uint16_t>(lane_index_raw);
+                            active_spawn_filter = filter;
+                            engine.setSpawnLaneFilter(active_spawn_filter);
+                            engine.handleCommand(crossroads::SimulatorEngine::UICommand::Reset);
+                            if (was_running)
+                            {
+                                engine.handleCommand(crossroads::SimulatorEngine::UICommand::Start);
+                            }
+                        }
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+            }
+            else if (cmd.rfind("spawn_rate:", 0) == 0)
+            {
+                const std::string rate_text = cmd.substr(std::string("spawn_rate:").size());
+                try
+                {
+                    const double parsed = std::stod(rate_text);
+                    traffic_rate = std::max(0.0, parsed);
+                    engine.setTrafficRate(traffic_rate);
+                }
+                catch (...)
+                {
+                }
+            }
         },
         [&]()
         {

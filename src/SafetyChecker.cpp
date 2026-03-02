@@ -259,6 +259,16 @@ namespace crossroads
         if (state.turnEastNorth == LightState::Green && is_active(state.south))
             return false;
 
+        // Dedicated left-turns cannot be green if opposing main corridor is active
+        if (state.turnNorthEast == LightState::Green && is_active(state.south))
+            return false;
+        if (state.turnSouthWest == LightState::Green && is_active(state.north))
+            return false;
+        if (state.turnEastSouth == LightState::Green && is_active(state.west))
+            return false;
+        if (state.turnWestNorth == LightState::Green && is_active(state.east))
+            return false;
+
         return true;
     }
 
@@ -294,7 +304,11 @@ namespace crossroads
                valid_for_light(prev.turnSouthEast, next.turnSouthEast) &&
                valid_for_light(prev.turnNorthWest, next.turnNorthWest) &&
                valid_for_light(prev.turnWestSouth, next.turnWestSouth) &&
-               valid_for_light(prev.turnEastNorth, next.turnEastNorth);
+               valid_for_light(prev.turnEastNorth, next.turnEastNorth) &&
+               valid_for_light(prev.turnNorthEast, next.turnNorthEast) &&
+               valid_for_light(prev.turnSouthWest, next.turnSouthWest) &&
+               valid_for_light(prev.turnEastSouth, next.turnEastSouth) &&
+               valid_for_light(prev.turnWestNorth, next.turnWestNorth);
     }
 
     bool SafetyChecker::checkOrangeTiming(const IntersectionState &prev, const IntersectionState &next, double dt_seconds) const
@@ -312,7 +326,11 @@ namespace crossroads
                check_orange_duration(prev.turnSouthEast, next.turnSouthEast) &&
                check_orange_duration(prev.turnNorthWest, next.turnNorthWest) &&
                check_orange_duration(prev.turnWestSouth, next.turnWestSouth) &&
-               check_orange_duration(prev.turnEastNorth, next.turnEastNorth);
+               check_orange_duration(prev.turnEastNorth, next.turnEastNorth) &&
+               check_orange_duration(prev.turnNorthEast, next.turnNorthEast) &&
+               check_orange_duration(prev.turnSouthWest, next.turnSouthWest) &&
+               check_orange_duration(prev.turnEastSouth, next.turnEastSouth) &&
+               check_orange_duration(prev.turnWestNorth, next.turnWestNorth);
     }
 
     bool SafetyChecker::checkCrossingLightSafety(const IntersectionState &prev, const IntersectionState &next) const
@@ -356,6 +374,16 @@ namespace crossroads
 
         // turnEastNorth cannot go green if South is active
         if (next.turnEastNorth == LightState::Green && is_active(next.south))
+            return false;
+
+        // Dedicated left-turns cannot go green while opposing main is active
+        if (next.turnNorthEast == LightState::Green && is_active(next.south))
+            return false;
+        if (next.turnSouthWest == LightState::Green && is_active(next.north))
+            return false;
+        if (next.turnEastSouth == LightState::Green && is_active(next.west))
+            return false;
+        if (next.turnWestNorth == LightState::Green && is_active(next.east))
             return false;
 
         return true;

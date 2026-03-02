@@ -45,6 +45,20 @@ button:hover {
     background: #1d4ed8;
 }
 
+.spawn-focus-select,
+.spawn-focus-input {
+    background: #1f2937;
+    color: #e5e7eb;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    padding: 6px 8px;
+    height: 34px;
+}
+
+.spawn-focus-input {
+    width: 72px;
+}
+
 .small {
     font-size: 12px;
     color: #9ca3af;
@@ -75,7 +89,7 @@ button:hover {
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    background: rgba(15, 23, 42, 0.34);
+    background: #111827;
     border: 2px dashed #334155;
     z-index: 8;
 }
@@ -294,6 +308,14 @@ button:hover {
     stroke-dasharray: 4 5;
 }
 
+.junction-straight-guide {
+    fill: none;
+    stroke: rgba(226, 232, 240, 0.9);
+    stroke-width: 1.4;
+    stroke-dasharray: 6 6;
+    stroke-linecap: round;
+}
+
 .junction-lane-layer {
     position: absolute;
     inset: 0;
@@ -418,6 +440,17 @@ button:hover {
     z-index: 8;
 }
 
+#signalLayer {
+    z-index: 30;
+}
+
+.vehicle-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 14;
+}
+
 .road-overlay {
     display: none;
 }
@@ -465,6 +498,21 @@ button:hover {
 .dyn-arrow.turn {
     color: #fbbf24;
     font-size: 14px;
+}
+
+.dyn-arrow.combined-svg {
+    width: 16px;
+    height: 16px;
+    overflow: visible;
+}
+
+.combined-arrow-path {
+    fill: none;
+    stroke: #bfdbfe;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    filter: drop-shadow(0 0 2px rgba(15, 23, 42, 0.9));
 }
 
 /* 3 signals per direction (2 straight + 1 turn) */
@@ -536,7 +584,7 @@ button:hover {
 .lane-separator {
     position: absolute;
     pointer-events: none;
-    z-index: 9;
+    z-index: 7;
 }
 
 .lane-separator.horizontal.outer {
@@ -606,6 +654,97 @@ button:hover {
 .lbl-sn {
     left: calc(50% + 116px);
     bottom: 12px;
+}
+
+.queue-corner-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 18;
+}
+
+.queue-corner {
+    position: absolute;
+    min-width: 170px;
+    max-width: 230px;
+    background: rgba(2, 6, 23, 0.74);
+    border: 1px solid rgba(71, 85, 105, 0.85);
+    border-radius: 8px;
+    padding: 6px 8px;
+    color: #e2e8f0;
+    box-shadow: 0 4px 12px rgba(2, 6, 23, 0.45);
+}
+
+.queue-corner-nw {
+    top: 8px;
+    left: 8px;
+}
+
+.queue-corner-no {
+    top: 8px;
+    right: 8px;
+}
+
+.queue-corner-so {
+    right: 8px;
+    bottom: 8px;
+}
+
+.queue-corner-sw {
+    left: 8px;
+    bottom: 8px;
+}
+
+.queue-corner-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.15px;
+    color: #93c5fd;
+}
+
+.queue-corner-meta {
+    margin-top: 2px;
+    margin-bottom: 4px;
+    font-size: 10px;
+    color: #94a3b8;
+}
+
+.queue-corner-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.queue-corner-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+}
+
+.queue-corner-lane {
+    color: #cbd5e1;
+}
+
+.queue-corner-values {
+    color: #f1f5f9;
+    font-variant-numeric: tabular-nums;
+}
+
+.queue-corner-routes {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.queue-corner-route {
+    font-size: 10px;
+    color: #bfdbfe;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .route-debug {
@@ -744,18 +883,20 @@ button:hover {
 
 .turn-side {
     position: absolute;
-    top: 0;
-    width: 4px;
-    height: 100%;
+    width: 3px;
+    height: 3px;
     background: #f59e0b;
+    border-radius: 1px;
 }
 
-.turn-side.left {
-    left: 0;
+.turn-side.front-left {
+    right: 1px;
+    top: 1px;
 }
 
-.turn-side.right {
-    right: 0;
+.turn-side.front-right {
+    right: 1px;
+    bottom: 1px;
 }
 
 @keyframes turnBlink {

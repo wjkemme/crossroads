@@ -15,7 +15,15 @@ namespace crossroads
         current_state = IntersectionState{};
         phase_elapsed = 0.0;
         current_phase = NS_GREEN;
+        demand_by_direction = {false, false, false, false};
+        ns_red_elapsed = 0.0;
+        ew_red_elapsed = 0.0;
         applyPhasePattern(NS_GREEN, current_state);
+    }
+
+    void BasicLightController::setDemandByDirection(const std::array<bool, 4> &demand)
+    {
+        demand_by_direction = demand;
     }
 
     void BasicLightController::applyPhasePattern(Phase phase, IntersectionState &state)
@@ -90,6 +98,10 @@ namespace crossroads
     void BasicLightController::tick(double dt_seconds)
     {
         phase_elapsed += dt_seconds;
+        updateRedTimers(dt_seconds);
+
+        const bool ns_demand = demand_by_direction[0] || demand_by_direction[1];
+        const bool ew_demand = demand_by_direction[2] || demand_by_direction[3];
 
         // Get phase duration
         double phase_duration = 0.0;
@@ -107,6 +119,18 @@ namespace crossroads
         case EW_ORANGE:
             phase_duration = SafetyChecker::ORANGE_DURATION;
             break;
+        }
+
+        const bool hold_current_green = (current_phase == NS_GREEN && ns_demand && !ew_demand) ||
+                                        (current_phase == EW_GREEN && ew_demand && !ns_demand);
+        if (hold_current_green && phase_elapsed >= phase_duration)
+        {
+            phase_elapsed = phase_duration - 1e-6;
+        }
+
+        if (shouldEndCurrentGreenEarly())
+        {
+            phase_elapsed = phase_duration;
         }
 
         // Handle multiple phase transitions in a single tick if needed
@@ -137,6 +161,50 @@ namespace crossroads
     IntersectionState BasicLightController::getCurrentState() const
     {
         return current_state;
+    }
+
+    bool BasicLightController::shouldEndCurrentGreenEarly() const
+    {
+        if ((current_phase != NS_GREEN && current_phase != EW_GREEN) || phase_elapsed < min_green_seconds)
+        {
+            return false;
+        }
+
+        const bool ns_demand = demand_by_direction[0] || demand_by_direction[1];
+        const bool ew_demand = demand_by_direction[2] || demand_by_direction[3];
+
+        if (current_phase == NS_GREEN)
+        {
+            const bool ew_starving = ew_demand && ew_red_elapsed >= max_red_seconds;
+            return ew_starving || (!ns_demand && ew_demand);
+        }
+
+        const bool ns_starving = ns_demand && ns_red_elapsed >= max_red_seconds;
+        return ns_starving || (!ew_demand && ns_demand);
+    }
+
+    void BasicLightController::updateRedTimers(double dt_seconds)
+    {
+        const bool ns_red = (current_phase == EW_GREEN || current_phase == EW_ORANGE);
+        const bool ew_red = (current_phase == NS_GREEN || current_phase == NS_ORANGE);
+
+        if (ns_red)
+        {
+            ns_red_elapsed += dt_seconds;
+        }
+        else
+        {
+            ns_red_elapsed = 0.0;
+        }
+
+        if (ew_red)
+        {
+            ew_red_elapsed += dt_seconds;
+        }
+        else
+        {
+            ew_red_elapsed = 0.0;
+        }
     }
 
 } // namespace crossroads

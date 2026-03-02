@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Crossroads UI</title>
-    <link rel="stylesheet" href="/assets/index.css?v=turn-arc-3" />
+    <link rel="stylesheet" href="/assets/index.css?v=turn-arc-11" />
 
 </head>
 
@@ -17,6 +17,17 @@
             <button onclick="cmd('stop')">Stop</button>
             <button onclick="cmd('reset')">Reset</button>
             <button onclick="cmd('step')">Step</button>
+            <select id="spawnFocusApproach" class="spawn-focus-select">
+                <option value="north">North</option>
+                <option value="east">East</option>
+                <option value="south">South</option>
+                <option value="west">West</option>
+            </select>
+            <input id="spawnFocusLane" class="spawn-focus-input" type="number" min="0" max="11" value="0" />
+            <button onclick="applySpawnFocus()">Focus lane</button>
+            <button onclick="clearSpawnFocus()">All traffic</button>
+            <input id="spawnRate" class="spawn-focus-input" type="number" min="0" step="0.1" value="0.8" />
+            <button onclick="applySpawnRate()">Set spawn rate</button>
             <div class="small" id="status">status</div>
         </div>
 
@@ -28,12 +39,12 @@
             <div class="card kpi">Safety Violations: <b id="viol">0</b></div>
             <div class="card kpi">Queue Total: <b id="qtotal">0</b></div>
             <div class="card kpi">Queue N/E/S/W: <b id="qnesw">0/0/0/0</b></div>
+            <div class="card kpi">Rendered/Queued: <b id="renderstats">0/0</b></div>
+            <div class="card kpi">Focus Active: <b id="focusactive">all</b></div>
+            <div class="card kpi">Left Protect N/E/S/W: <b id="leftprotect">-/-/-/-</b></div>
         </div>
 
         <div class="road-wrap">
-            <div id="turnArcBadge"
-                style="position:absolute; left:10px; top:10px; z-index:30; background:rgba(15,23,42,0.9); border:1px solid #a21caf; color:#f472b6; font-size:12px; padding:4px 8px; border-radius:6px;">
-                turn arcs: pending</div>
             <div class="road-h"></div>
             <div class="road-v"></div>
             <div class="median-h"></div>
@@ -92,19 +103,21 @@
             <div class="lane-label lbl-ns" id="lbl-ns">North→South</div>
             <div class="lane-label lbl-sn" id="lbl-sn">South→North</div>
 
+            <div id="queueCornerLayer" class="queue-corner-layer">
+                <div id="queueCornerNW" class="queue-corner queue-corner-nw"></div>
+                <div id="queueCornerNO" class="queue-corner queue-corner-no"></div>
+                <div id="queueCornerSO" class="queue-corner queue-corner-so"></div>
+                <div id="queueCornerSW" class="queue-corner queue-corner-sw"></div>
+            </div>
+
             <div id="signalLayer" class="dynamic-layer"></div>
             <div id="stopLineLayer" class="stop-line-layer"></div>
             <div id="junctionLaneLayer" class="junction-lane-layer"></div>
             <div id="junctionRouteLayer" class="junction-route-layer"></div>
+            <div id="vehicleLayer" class="vehicle-layer"></div>
             <div id="arrowLayer" class="dynamic-layer"></div>
 
 
-            <div id="routeDebug" class="route-debug">
-                <div class="route-debug-title">Route debug (from → to)</div>
-                <div id="turnArcDebug" class="route-debug-row" style="color:#f472b6; margin-bottom:6px;">turn arcs:
-                    pending</div>
-                <div id="routeDebugList" class="route-debug-list"></div>
-            </div>
         </div>
 
     </div>
@@ -147,9 +160,30 @@
         const STOP_LINE_THICKNESS_PX = 4;
         const SIGNAL_SIZE_PX = 8;
         const SIGNAL_BEHIND_STOP_PX = 2;
+        const SIGNAL_INTERSECTION_SIDE_GAP_PX = 4;
+        const VEHICLE_STOP_CLEARANCE_PX = 10;
+        const MAX_RENDERED_VEHICLES_PER_LANE = 70;
         const JUNCTION_ROUTE_INSET_PX = 3;
+        const JUNCTION_SCALE = 1.18;
+        const OUTBOUND_GHOST_TRAVEL_SECONDS = 1.6;
         let lastConnectivitySyncMs = 0;
         let lastUiErrorLogMs = 0;
+        let refreshInFlight = false;
+        let frameRenderedVehicleCount = 0;
+        let previousSnapshotVehicleMap = new Map();
+        let previousSnapshotSimTime = null;
+        const outboundGhosts = [];
+
+        async function fetchWithTimeout(url, options = {}, timeoutMs = 1800) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch(url, { ...options, signal: controller.signal });
+                return response;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
 
         function logUiError(context, error) {
             const now = Date.now();
@@ -260,6 +294,40 @@
             return 'red';
         }
 
+        function turnLightKey(direction, movement) {
+            const mv = String(movement || '').toLowerCase();
+            if (mv === 'right') {
+                if (direction === 'north') return 'turnNorthWest';
+                if (direction === 'south') return 'turnSouthEast';
+                if (direction === 'east') return 'turnEastNorth';
+                return 'turnWestSouth';
+            }
+            if (mv === 'left') {
+                if (direction === 'north') return 'turnNorthEast';
+                if (direction === 'south') return 'turnSouthWest';
+                if (direction === 'east') return 'turnEastSouth';
+                return 'turnWestNorth';
+            }
+            return '';
+        }
+
+        function signalValueForLane(direction, laneCfg, lights) {
+            const mainLight = lights ? lights[direction] : 'red';
+            const moves = Array.isArray(laneCfg && laneCfg.allowed_movements)
+                ? laneCfg.allowed_movements.map((m) => String(m).toLowerCase())
+                : ['straight'];
+            const uniqueMoves = Array.from(new Set(moves));
+
+            if (uniqueMoves.length === 1 && (uniqueMoves[0] === 'right' || uniqueMoves[0] === 'left')) {
+                const key = turnLightKey(direction, uniqueMoves[0]);
+                if (key && lights && typeof lights[key] === 'string') {
+                    return lights[key];
+                }
+            }
+
+            return mainLight;
+        }
+
         function straightArrowForDirection(direction) {
             if (direction === 'west') return '→';
             if (direction === 'east') return '←';
@@ -281,19 +349,82 @@
             return '↖';
         }
 
-        function arrowGlyphForLane(direction, laneCfg) {
-            const moves = Array.isArray(laneCfg && laneCfg.allowed_movements) ? laneCfg.allowed_movements.map((m) => String(m)) : [];
-            const hasStraight = moves.includes('straight');
+        function arrowGlyphsForLane(direction, laneCfg) {
+            const movesRaw = Array.isArray(laneCfg && laneCfg.allowed_movements)
+                ? laneCfg.allowed_movements.map((m) => String(m).toLowerCase())
+                : [];
+            const moves = Array.from(new Set(movesRaw));
+
             const hasLeft = moves.includes('left');
+            const hasStraight = moves.includes('straight');
             const hasRight = moves.includes('right');
 
-            if (hasRight && !hasStraight && !hasLeft) {
-                return { glyph: rightArrowForDirection(direction), turn: true };
+            if (hasStraight && hasRight && !hasLeft) {
+                return [{
+                    glyph: '',
+                    turn: false,
+                    combo: 'straight-right',
+                    combined: true
+                }];
             }
-            if (hasLeft && !hasStraight && !hasRight) {
-                return { glyph: leftArrowForDirection(direction), turn: true };
+
+            if (hasStraight && hasLeft && !hasRight) {
+                return [{
+                    glyph: '',
+                    turn: false,
+                    combo: 'straight-left',
+                    combined: true
+                }];
             }
-            return { glyph: straightArrowForDirection(direction), turn: false };
+
+            const ordered = ['left', 'straight', 'right'];
+            const glyphs = [];
+            for (const movement of ordered) {
+                if (!moves.includes(movement)) continue;
+                if (movement === 'left') {
+                    glyphs.push({ glyph: leftArrowForDirection(direction), turn: true, combined: false });
+                } else if (movement === 'right') {
+                    glyphs.push({ glyph: rightArrowForDirection(direction), turn: true, combined: false });
+                } else {
+                    glyphs.push({ glyph: straightArrowForDirection(direction), turn: false, combined: false });
+                }
+            }
+
+            if (glyphs.length === 0) {
+                glyphs.push({ glyph: straightArrowForDirection(direction), turn: false, combined: false });
+            }
+
+            return glyphs;
+        }
+
+        function combinedArrowPathFor(combo) {
+            if (combo === 'straight-right') {
+                return 'M 2 12 L 20 12 M 20 12 L 17.5 9.5 M 20 12 L 17.5 14.5 M 12 12 C 12 16.8 14.5 20 17.2 22.8 M 17.2 22.8 L 17.2 19.9 M 17.2 22.8 L 14.3 22.8';
+            }
+            return 'M 2 12 L 20 12 M 20 12 L 17.5 9.5 M 20 12 L 17.5 14.5 M 12 12 C 12 7.2 14.5 4 17.2 1.2 M 17.2 1.2 L 17.2 4.1 M 17.2 1.2 L 14.3 1.2';
+        }
+
+        function createCombinedArrowElement(direction, combo) {
+            const ns = 'http://www.w3.org/2000/svg';
+            const svg = document.createElementNS(ns, 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('class', 'dyn-arrow combined-svg');
+            const rotationByDirection = {
+                west: 0,
+                north: 90,
+                east: 180,
+                south: -90
+            };
+            const angle = rotationByDirection[String(direction || '').toLowerCase()] || 0;
+            svg.style.transform = `rotate(${angle}deg)`;
+            svg.style.transformOrigin = '50% 50%';
+
+            const path = document.createElementNS(ns, 'path');
+            path.setAttribute('class', 'combined-arrow-path');
+            path.setAttribute('d', combinedArrowPathFor(combo));
+            svg.appendChild(path);
+
+            return svg;
         }
 
         function setLaneSignal(id, value) {
@@ -309,25 +440,40 @@
             el.className = parts.join(' ');
         }
 
-        function stopLinePx(direction, laneLen) {
-            // Align pixel stoplijn per richting vóór de kruising (incoming side)
-            const mid = laneLen * 0.5;
-            const off = 60; // afstand vanaf het midden naar de stoplijn
-            switch (direction) {
-                case 'west': return mid - off; // W->E: voor het midden
-                case 'east': return mid - off; // E->W: spiegel, axis wordt later omgedraaid
-                case 'north': return mid - off; // N->S: boven het midden
-                case 'south': return mid - off; // S->N: spiegel, axis wordt later omgedraaid
-                default: return Math.max(40, Math.floor(laneLen * 0.33));
+        function stopLinePx(direction, laneLen, laneEl, roadWrap, cuts) {
+            if (!laneEl || !roadWrap || !cuts) {
+                const mid = laneLen * 0.5;
+                const off = 60;
+                return Math.max(0, Math.min(laneLen, mid - off));
             }
+
+            const centerX = roadWrap.clientWidth * 0.5;
+            const centerY = roadWrap.clientHeight * 0.5;
+            const stopXWest = centerX - cuts.left - STOP_LINE_GAP_PX;
+            const stopXEast = centerX + cuts.right + STOP_LINE_GAP_PX;
+            const stopYNorth = centerY - cuts.top - STOP_LINE_GAP_PX;
+            const stopYSouth = centerY + cuts.bottom + STOP_LINE_GAP_PX;
+
+            let dist = laneLen * 0.33;
+            if (direction === 'west') {
+                dist = stopXWest - laneEl.offsetLeft;
+            } else if (direction === 'east') {
+                dist = (laneEl.offsetLeft + laneLen) - stopXEast;
+            } else if (direction === 'north') {
+                dist = stopYNorth - laneEl.offsetTop;
+            } else if (direction === 'south') {
+                dist = (laneEl.offsetTop + laneLen) - stopYSouth;
+            }
+
+            return Math.max(0, Math.min(laneLen, dist));
         }
 
-        function laneProgress(v, simTime, laneLen, direction) {
-            const stopPx = stopLinePx(direction, laneLen);
+        function laneProgress(v, simTime, laneLen, direction, laneEl, roadWrap, cuts) {
+            const stopPx = stopLinePx(direction, laneLen, laneEl, roadWrap, cuts);
             const metersToPx = stopPx / 70.0; // STOP_LINE_POSITION = 70m
             const queuePx = Math.min(stopPx, Math.max(0, Number(v.position || 0) * metersToPx));
             if (!v.crossing) {
-                return queuePx;
+                return Math.min(Math.max(0, stopPx - VEHICLE_STOP_CLEARANCE_PX), queuePx);
             }
 
             const ctime = Number(v.crossing_time ?? -1);
@@ -351,6 +497,148 @@
             // Turning cars need full duration to complete visual arc
             const t = ctime >= 0 ? (simTime - ctime) / cdur : 0;
             return Math.max(0, Math.min(1, t));
+        }
+
+        function headingForDirection(direction) {
+            if (direction === 'west') return 0;
+            if (direction === 'east') return 180;
+            if (direction === 'north') return 90;
+            return -90;
+        }
+
+        function snapshotVehicleMap(snapshot) {
+            const map = new Map();
+            for (const direction of ['north', 'east', 'south', 'west']) {
+                const vehicles = Array.isArray(snapshot?.lanes?.[direction]) ? snapshot.lanes[direction] : [];
+                for (const vehicle of vehicles) {
+                    const idNum = Number(vehicle?.id);
+                    if (!Number.isFinite(idNum)) {
+                        continue;
+                    }
+                    map.set(idNum, { direction, vehicle });
+                }
+            }
+            return map;
+        }
+
+        function updateOutboundGhosts(snapshot) {
+            const currentMap = snapshotVehicleMap(snapshot);
+            const simTime = Number(snapshot?.sim_time ?? 0);
+
+            if (previousSnapshotSimTime !== null && simTime + 1e-6 < previousSnapshotSimTime) {
+                previousSnapshotVehicleMap = new Map();
+                outboundGhosts.length = 0;
+            }
+
+            const dt = previousSnapshotSimTime === null ? 0 : Math.max(0, simTime - previousSnapshotSimTime);
+
+            for (const ghost of outboundGhosts) {
+                ghost.outbound_progress = Math.max(0, Math.min(1, ghost.outbound_progress + (dt / OUTBOUND_GHOST_TRAVEL_SECONDS)));
+            }
+            for (let i = outboundGhosts.length - 1; i >= 0; --i) {
+                if (outboundGhosts[i].outbound_progress >= 1) {
+                    outboundGhosts.splice(i, 1);
+                }
+            }
+
+            for (const [id, previous] of previousSnapshotVehicleMap.entries()) {
+                if (currentMap.has(id)) {
+                    continue;
+                }
+
+                const prevVehicle = previous.vehicle || {};
+                if (!prevVehicle.crossing) {
+                    continue;
+                }
+
+                const destDir = travelDirectionFromDestinationApproach(prevVehicle.destination_approach);
+                if (!destDir) {
+                    continue;
+                }
+
+                const laneCount = Math.max(1, toLaneCountForTravelDirection(destDir));
+                const laneIdxRaw = Number(prevVehicle.destination_lane_index);
+                const laneIdx = Number.isFinite(laneIdxRaw)
+                    ? Math.max(0, Math.min(laneCount - 1, Math.floor(laneIdxRaw)))
+                    : 0;
+
+                outboundGhosts.push({
+                    id: `ghost-${id}-${simTime}`,
+                    from_approach: String(previous.direction || '').toLowerCase(),
+                    from_lane_index: Math.max(0, Number(configuredLaneIndex(prevVehicle) ?? laneIdx) || 0),
+                    to_approach: String(prevVehicle.destination_approach || '').toLowerCase(),
+                    to_direction: destDir,
+                    to_lane_index: laneIdx,
+                    movement: String(prevVehicle.movement || (prevVehicle.turning ? 'right' : 'straight')).toLowerCase(),
+                    outbound_progress: 0,
+                    speed: Number(prevVehicle.speed || 8)
+                });
+            }
+
+            previousSnapshotVehicleMap = currentMap;
+            previousSnapshotSimTime = simTime;
+        }
+
+        function outgoingVectorForApproach(approach) {
+            const value = String(approach || '').toLowerCase();
+            if (value === 'north') return { x: 0, y: -1 };
+            if (value === 'south') return { x: 0, y: 1 };
+            if (value === 'east') return { x: 1, y: 0 };
+            return { x: -1, y: 0 };
+        }
+
+        function renderOutboundGhosts() {
+            const vehicleLayer = document.getElementById('vehicleLayer');
+            const roadWrap = document.querySelector('.road-wrap');
+            if (!vehicleLayer || !roadWrap || outboundGhosts.length === 0) {
+                return;
+            }
+
+            const cuts = junctionCuts();
+            const width = roadWrap.clientWidth;
+            const height = roadWrap.clientHeight;
+
+            for (const ghost of outboundGhosts) {
+                const fromApproach = String(ghost.from_approach || '').toLowerCase();
+                const toApproach = String(ghost.to_approach || '').toLowerCase();
+                if (!fromApproach || !toApproach) {
+                    continue;
+                }
+
+                const connection = {
+                    from_approach: fromApproach,
+                    from_lane_index: Math.max(0, Number(ghost.from_lane_index) || 0),
+                    movement: String(ghost.movement || 'straight').toLowerCase(),
+                    to_approach: toApproach,
+                    to_lane_index: Math.max(0, Number(ghost.to_lane_index) || 0)
+                };
+
+                const geo = junctionConnectionGeometry(connection, roadWrap, cuts);
+                if (!geo || !geo.end) {
+                    continue;
+                }
+
+                const outVec = outgoingVectorForApproach(toApproach);
+                const edgeDistance = (outVec.x > 0) ? (width - geo.end.x)
+                    : (outVec.x < 0) ? geo.end.x
+                        : (outVec.y > 0) ? (height - geo.end.y)
+                            : geo.end.y;
+                const maxTravel = Math.max(16, edgeDistance - 6);
+                const travel = Math.max(0, Math.min(maxTravel, maxTravel * Math.max(0, Math.min(1, Number(ghost.outbound_progress || 0)))));
+                const x = geo.end.x + outVec.x * travel;
+                const y = geo.end.y + outVec.y * travel;
+
+                const car = document.createElement('div');
+                car.className = 'car';
+                car.style.left = `${x - 6}px`;
+                car.style.top = `${y - 3.5}px`;
+                const heading = Math.atan2(outVec.y, outVec.x) * (180 / Math.PI);
+                car.style.transformOrigin = 'center center';
+                car.style.transform = `rotate(${heading}deg)`;
+                car.title = `id=${ghost.id}, segment=after, speed=${Number(ghost.speed || 0).toFixed(1)}m/s`;
+                vehicleLayer.appendChild(car);
+                frameRenderedVehicleCount += 1;
+            }
         }
 
         function cubicBezier01(t, p1, p2) {
@@ -477,11 +765,18 @@
         }
 
         function junctionCuts() {
-            return {
+            const base = {
                 left: laneThicknessForDirection('north'),
                 right: laneThicknessForDirection('south'),
                 top: laneThicknessForDirection('east'),
                 bottom: laneThicknessForDirection('west')
+            };
+
+            return {
+                left: Math.round(base.left * JUNCTION_SCALE),
+                right: Math.round(base.right * JUNCTION_SCALE),
+                top: Math.round(base.top * JUNCTION_SCALE),
+                bottom: Math.round(base.bottom * JUNCTION_SCALE)
             };
         }
 
@@ -573,6 +868,8 @@
             if (!lanes || lanes.length === 0) {
                 const fallbackCount = laneCountForDirection(direction);
                 lanes = Array.from({ length: fallbackCount }, () => ({
+                    id: null,
+                    name: '',
                     connected_to_intersection: true,
                     has_traffic_light: true,
                     allowed_movements: ['straight']
@@ -581,12 +878,268 @@
             return lanes;
         }
 
-        function effectiveLaneConnections() {
-            if (Array.isArray(laneConnections) && laneConnections.length > 0) {
-                return laneConnections;
+        function displayDirectionName(direction) {
+            const value = String(direction || '').toLowerCase();
+            if (value === 'north') return 'North';
+            if (value === 'east') return 'East';
+            if (value === 'south') return 'South';
+            return 'West';
+        }
+
+        function directionCode(direction) {
+            const value = String(direction || '').toLowerCase();
+            if (value === 'north') return 'N';
+            if (value === 'east') return 'E';
+            if (value === 'south') return 'S';
+            return 'W';
+        }
+
+        function movementSegmentLabel(movement) {
+            const value = String(movement || '').toLowerCase();
+            if (value === 'right') return 'rechts';
+            if (value === 'left') return 'links';
+            return 'straight';
+        }
+
+        function uniqueLaneMovements(laneCfg) {
+            const rawMoves = Array.isArray(laneCfg?.allowed_movements) && laneCfg.allowed_movements.length > 0
+                ? laneCfg.allowed_movements
+                : ['straight'];
+            return Array.from(new Set(rawMoves.map((value) => String(value || 'straight').toLowerCase())));
+        }
+
+        function resolveBranchTargets(fromApproach, fromLaneIndex, movement) {
+            const from = String(fromApproach || '').toLowerCase();
+            const mv = String(movement || 'straight').toLowerCase();
+            const matches = (Array.isArray(laneConnections) ? laneConnections : []).filter((entry) => {
+                return String(entry?.from_approach || '').toLowerCase() === from &&
+                    Number(entry?.from_lane_index) === Number(fromLaneIndex) &&
+                    String(entry?.movement || 'straight').toLowerCase() === mv;
+            });
+
+            if (matches.length > 0) {
+                return matches.map((entry) => ({
+                    toApproach: String(entry.to_approach || '').toLowerCase(),
+                    toLaneIndex: Math.max(0, Number(entry.to_lane_index) || 0)
+                }));
             }
 
-            const derived = [];
+            const fallbackApproach = destinationApproachForMovement(from, mv);
+            const toMax = Math.max(0, clampLaneCount(toLaneCountsByApproach[fallbackApproach] || 1) - 1);
+            return [{
+                toApproach: fallbackApproach,
+                toLaneIndex: Math.max(0, Math.min(toMax, Number(fromLaneIndex) || 0))
+            }];
+        }
+
+        function routeCountKey(fromDirection, fromLaneIndex, movement, toDirection, toLaneIndex) {
+            return [
+                String(fromDirection || '').toLowerCase(),
+                Math.max(0, Number(fromLaneIndex) || 0),
+                String(movement || 'straight').toLowerCase(),
+                String(toDirection || '').toLowerCase(),
+                Math.max(0, Number(toLaneIndex) || 0)
+            ].join('|');
+        }
+
+        function outputLaneKey(toDirection, toLaneIndex) {
+            return [
+                String(toDirection || '').toLowerCase(),
+                Math.max(0, Number(toLaneIndex) || 0)
+            ].join('|');
+        }
+
+        function buildCanonicalAfterCounts() {
+            const afterByOutputLane = new Map();
+            for (const ghost of outboundGhosts) {
+                const toDirection = String(ghost.to_direction || travelDirectionFromDestinationApproach(ghost.to_approach) || '').toLowerCase();
+                if (!toDirection) {
+                    continue;
+                }
+                const toLaneIndex = Math.max(0, Number(ghost.to_lane_index) || 0);
+                const key = outputLaneKey(toDirection, toLaneIndex);
+                afterByOutputLane.set(key, (afterByOutputLane.get(key) || 0) + 1);
+            }
+            return afterByOutputLane;
+        }
+
+        function buildRouteBranchPanelStats(snapshot, direction, canonicalAfterCounts) {
+            const dir = String(direction || '').toLowerCase();
+            const lanes = lanesForDirection(dir);
+            const vehicles = Array.isArray(snapshot?.lanes?.[dir]) ? snapshot.lanes[dir] : [];
+
+            const beforeByLane = new Map();
+            const junctionByRoute = new Map();
+
+            for (const vehicle of vehicles) {
+                const laneIndex = configuredLaneIndex(vehicle);
+                if (laneIndex === null || laneIndex < 0) {
+                    continue;
+                }
+
+                const movement = String(vehicle.movement || (vehicle.turning ? 'right' : 'straight')).toLowerCase();
+                const toApproach = String(vehicle.destination_approach || '').toLowerCase();
+                const toDirection = travelDirectionFromDestinationApproach(toApproach);
+                const toLaneIndex = Math.max(0, Number(vehicle.destination_lane_index) || 0);
+
+                if (vehicle.crossing) {
+                    const key = routeCountKey(dir, laneIndex, movement, toDirection, toLaneIndex);
+                    junctionByRoute.set(key, (junctionByRoute.get(key) || 0) + 1);
+                } else {
+                    beforeByLane.set(laneIndex, (beforeByLane.get(laneIndex) || 0) + 1);
+                }
+            }
+
+            const branches = [];
+            for (let laneIndex = 0; laneIndex < lanes.length; laneIndex++) {
+                const laneCfg = lanes[laneIndex] || {};
+                if (laneCfg.connected_to_intersection === false) {
+                    continue;
+                }
+
+                const movements = uniqueLaneMovements(laneCfg);
+                const before = beforeByLane.get(laneIndex) || 0;
+                for (const movement of movements) {
+                    const targets = resolveBranchTargets(dir, laneIndex, movement);
+                    for (const target of targets) {
+                        const toDirection = travelDirectionFromDestinationApproach(target.toApproach);
+                        const toLaneIndex = Math.max(0, Number(target.toLaneIndex) || 0);
+                        const key = routeCountKey(dir, laneIndex, movement, toDirection, toLaneIndex);
+                        const outputKey = outputLaneKey(toDirection, toLaneIndex);
+                        branches.push({
+                            fromDirection: dir,
+                            fromLaneIndex: laneIndex,
+                            movement,
+                            toDirection,
+                            toLaneIndex,
+                            before,
+                            junction: junctionByRoute.get(key) || 0,
+                            after: canonicalAfterCounts.get(outputKey) || 0
+                        });
+                    }
+                }
+            }
+
+            const active = branches.filter((entry) => (entry.before + entry.junction + entry.after) > 0).length;
+
+            const outboundLaneCount = Math.max(1, toLaneCountForTravelDirection(dir));
+            const outbound = [];
+            for (let laneIndex = 0; laneIndex < outboundLaneCount; laneIndex++) {
+                const outKey = outputLaneKey(dir, laneIndex);
+                outbound.push({
+                    direction: dir,
+                    laneIndex,
+                    after: canonicalAfterCounts.get(outKey) || 0
+                });
+            }
+
+            return { branches, active, lanes: lanes.length, outbound };
+        }
+
+        function renderQueueCardContent(container, direction, panelStats) {
+            if (!container) {
+                return;
+            }
+
+            container.innerHTML = '';
+
+            const title = document.createElement('div');
+            title.className = 'queue-corner-title';
+            title.textContent = `Queues from ${displayDirectionName(direction)}`;
+            container.appendChild(title);
+
+            const branches = Array.isArray(panelStats?.branches) ? panelStats.branches : [];
+            const used = Number(panelStats?.active) || 0;
+            const laneCount = Number(panelStats?.lanes) || 0;
+            const meta = document.createElement('div');
+            meta.className = 'queue-corner-meta';
+            meta.textContent = `${used}/${branches.length} route branches active (${laneCount} incoming lanes)`;
+            container.appendChild(meta);
+
+            const list = document.createElement('div');
+            list.className = 'queue-corner-list';
+
+            for (const entry of branches) {
+                const row = document.createElement('div');
+                row.className = 'queue-corner-row';
+
+                const laneName = document.createElement('span');
+                laneName.className = 'queue-corner-lane';
+                const fromCode = `${directionCode(entry.fromDirection)}${entry.fromLaneIndex}`;
+                const mid = movementSegmentLabel(entry.movement);
+                const toCode = `${directionCode(entry.toDirection)}${entry.toLaneIndex}`;
+                laneName.textContent = `${fromCode}-voor | ${fromCode}-${mid} | ${toCode}-na`;
+
+                const values = document.createElement('span');
+                values.className = 'queue-corner-values';
+                values.textContent = `${entry.before} | ${entry.junction} | ${entry.after}`;
+
+                row.appendChild(laneName);
+                row.appendChild(values);
+                list.appendChild(row);
+            }
+
+            container.appendChild(list);
+
+            const outbound = Array.isArray(panelStats?.outbound) ? panelStats.outbound : [];
+            if (outbound.length > 0) {
+                const outboundHeader = document.createElement('div');
+                outboundHeader.className = 'queue-corner-meta';
+                outboundHeader.textContent = 'fysieke -na lanes:';
+                container.appendChild(outboundHeader);
+
+                const outboundList = document.createElement('div');
+                outboundList.className = 'queue-corner-list';
+                for (const out of outbound) {
+                    const row = document.createElement('div');
+                    row.className = 'queue-corner-row';
+
+                    const laneName = document.createElement('span');
+                    laneName.className = 'queue-corner-lane';
+                    laneName.textContent = `${directionCode(out.direction)}${out.laneIndex}-na`;
+
+                    const values = document.createElement('span');
+                    values.className = 'queue-corner-values';
+                    values.textContent = `${out.after}`;
+
+                    row.appendChild(laneName);
+                    row.appendChild(values);
+                    outboundList.appendChild(row);
+                }
+                container.appendChild(outboundList);
+            }
+        }
+
+        function renderCornerQueueOverlays(snapshot) {
+            const canonicalAfterCounts = buildCanonicalAfterCounts();
+            renderQueueCardContent(document.getElementById('queueCornerNO'), 'east', buildRouteBranchPanelStats(snapshot, 'east', canonicalAfterCounts));
+            renderQueueCardContent(document.getElementById('queueCornerSO'), 'south', buildRouteBranchPanelStats(snapshot, 'south', canonicalAfterCounts));
+            renderQueueCardContent(document.getElementById('queueCornerSW'), 'west', buildRouteBranchPanelStats(snapshot, 'west', canonicalAfterCounts));
+            renderQueueCardContent(document.getElementById('queueCornerNW'), 'north', buildRouteBranchPanelStats(snapshot, 'north', canonicalAfterCounts));
+        }
+
+        function effectiveLaneConnections() {
+            const combined = [];
+            const seen = new Set();
+            const addUnique = (entry) => {
+                const key = [
+                    String(entry.from_approach || '').toLowerCase(),
+                    Number(entry.from_lane_index) || 0,
+                    String(entry.movement || 'straight').toLowerCase(),
+                    String(entry.to_approach || '').toLowerCase(),
+                    Number(entry.to_lane_index) || 0
+                ].join('|');
+                if (seen.has(key)) return;
+                seen.add(key);
+                combined.push(entry);
+            };
+
+            if (Array.isArray(laneConnections) && laneConnections.length > 0) {
+                for (const entry of laneConnections) {
+                    addUnique(entry);
+                }
+            }
+
             for (const approachId of ['north', 'east', 'south', 'west']) {
                 const lanes = lanesForDirection(approachId);
                 for (let laneIndex = 0; laneIndex < lanes.length; laneIndex++) {
@@ -600,7 +1153,7 @@
                     for (const movement of moves) {
                         const toApproach = destinationApproachForMovement(approachId, movement);
                         const toMax = Math.max(0, clampLaneCount(toLaneCountsByApproach[toApproach] || 1) - 1);
-                        derived.push({
+                        addUnique({
                             from_approach: approachId,
                             from_lane_index: laneIndex,
                             movement: String(movement || 'straight').toLowerCase(),
@@ -611,7 +1164,7 @@
                 }
             }
 
-            return derived;
+            return combined;
         }
 
         function drawRoadBodyOverlay() {
@@ -979,17 +1532,7 @@
         function renderJunctionLaneConnections() {
             const layer = document.getElementById('junctionLaneLayer');
             const roadWrap = document.querySelector('.road-wrap');
-            const turnArcDebug = document.getElementById('turnArcDebug');
-            const turnArcBadge = document.getElementById('turnArcBadge');
             if (!layer || !roadWrap) {
-                if (turnArcDebug) {
-                    turnArcDebug.textContent = 'turn arcs: layer missing';
-                    turnArcDebug.style.color = '#f87171';
-                }
-                if (turnArcBadge) {
-                    turnArcBadge.textContent = 'turn arcs: layer missing';
-                    turnArcBadge.style.color = '#f87171';
-                }
                 return;
             }
 
@@ -1033,6 +1576,14 @@
                 const laneIndex = Number(connection.from_lane_index) || 0;
                 const hasLowerNeighbor = group.some((g) => Number(g.from_lane_index) === laneIndex - 1);
                 const hasUpperNeighbor = group.some((g) => Number(g.from_lane_index) === laneIndex + 1);
+                const sourceLanes = lanesForDirection(String(connection.from_approach || '').toLowerCase());
+                const sourceLane = sourceLanes[laneIndex] || {};
+                const sourceMoves = Array.isArray(sourceLane.allowed_movements)
+                    ? sourceLane.allowed_movements.map((m) => String(m).toLowerCase())
+                    : [];
+                const hasStraightInLane = sourceMoves.includes('straight');
+                const hasCurrentTurnInLane = sourceMoves.includes(movement);
+                const preferDashedTurnBoundary = hasStraightInLane && hasCurrentTurnInLane;
 
                 const lowerEdgeGeo = junctionConnectionGeometry(connection, roadWrap, cuts, {
                     fromOffsetSlots: -0.5,
@@ -1040,7 +1591,7 @@
                 });
                 if (lowerEdgeGeo) {
                     const lowerEdge = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                    lowerEdge.setAttribute('class', hasLowerNeighbor ? 'turn-boundary dashed' : 'turn-boundary solid');
+                    lowerEdge.setAttribute('class', (preferDashedTurnBoundary || hasLowerNeighbor) ? 'turn-boundary dashed' : 'turn-boundary solid');
                     lowerEdge.setAttribute('d', lowerEdgeGeo.pathD);
                     svg.appendChild(lowerEdge);
                 }
@@ -1051,21 +1602,13 @@
                 });
                 if (upperEdgeGeo) {
                     const upperEdge = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                    upperEdge.setAttribute('class', hasUpperNeighbor ? 'turn-boundary dashed' : 'turn-boundary solid');
+                    upperEdge.setAttribute('class', (preferDashedTurnBoundary || hasUpperNeighbor) ? 'turn-boundary dashed' : 'turn-boundary solid');
                     upperEdge.setAttribute('d', upperEdgeGeo.pathD);
                     svg.appendChild(upperEdge);
                 }
             }
 
             layer.appendChild(svg);
-            if (turnArcDebug) {
-                turnArcDebug.textContent = `turn arcs: ${drawnTurnArcCount}`;
-                turnArcDebug.style.color = drawnTurnArcCount > 0 ? '#34d399' : '#f87171';
-            }
-            if (turnArcBadge) {
-                turnArcBadge.textContent = `turn arcs: ${drawnTurnArcCount}`;
-                turnArcBadge.style.color = drawnTurnArcCount > 0 ? '#34d399' : '#f87171';
-            }
         }
 
         function renderJunctionRouteMarkings() {
@@ -1076,7 +1619,47 @@
             }
 
             layer.innerHTML = '';
-            return;
+
+            const cuts = junctionCuts();
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('class', 'junction-route-svg');
+            svg.setAttribute('viewBox', `0 0 ${roadWrap.clientWidth} ${roadWrap.clientHeight}`);
+
+            const drawnPaths = new Set();
+
+            for (const connection of effectiveLaneConnections()) {
+                const movement = String(connection && connection.movement || 'straight').toLowerCase();
+                if (movement !== 'straight') {
+                    continue;
+                }
+
+                const lowerEdgeGeo = junctionConnectionGeometry(connection, roadWrap, cuts, {
+                    fromOffsetSlots: -0.5,
+                    toOffsetSlots: -0.5
+                });
+                const upperEdgeGeo = junctionConnectionGeometry(connection, roadWrap, cuts, {
+                    fromOffsetSlots: 0.5,
+                    toOffsetSlots: 0.5
+                });
+
+                const edges = [lowerEdgeGeo, upperEdgeGeo];
+                for (const edgeGeo of edges) {
+                    if (!edgeGeo) {
+                        continue;
+                    }
+                    if (drawnPaths.has(edgeGeo.pathD)) {
+                        continue;
+                    }
+                    drawnPaths.add(edgeGeo.pathD);
+
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('class', 'junction-straight-guide');
+                    path.setAttribute('d', edgeGeo.pathD);
+                    svg.appendChild(path);
+                }
+            }
+
+            layer.appendChild(svg);
         }
 
         function renderDynamicSignalsAndArrows(lights) {
@@ -1100,31 +1683,41 @@
                 }
 
                 const lanes = lanesForDirection(direction);
-                const lightValue = lights ? lights[direction] : 'red';
 
                 for (let laneIndex = 0; laneIndex < lanes.length; laneIndex++) {
                     const laneCfg = lanes[laneIndex] || {};
+                    const lightValue = signalValueForLane(direction, laneCfg, lights);
                     const laneCenter = laneCenterOffset(direction, laneIndex);
 
-                    const arrow = document.createElement('div');
-                    const arrowInfo = arrowGlyphForLane(direction, laneCfg);
-                    arrow.className = 'dyn-arrow' + (arrowInfo.turn ? ' turn' : '');
-                    arrow.textContent = arrowInfo.glyph;
+                    const arrowInfos = arrowGlyphsForLane(direction, laneCfg);
+                    const arrowSpread = arrowInfos.length > 1 ? 7 : 0;
+                    const startOffset = -((arrowInfos.length - 1) * arrowSpread) / 2;
+                    for (let arrowIdx = 0; arrowIdx < arrowInfos.length; arrowIdx++) {
+                        const arrowInfo = arrowInfos[arrowIdx];
+                        const arrow = (arrowInfo.combined && arrowInfo.combo)
+                            ? createCombinedArrowElement(direction, arrowInfo.combo)
+                            : document.createElement('div');
+                        if (!(arrowInfo.combined && arrowInfo.combo)) {
+                            arrow.className = 'dyn-arrow' + (arrowInfo.turn ? ' turn' : '') + (arrowInfo.combined ? ' combined' : '');
+                            arrow.textContent = arrowInfo.glyph;
+                        }
+                        const offset = startOffset + (arrowIdx * arrowSpread);
 
-                    if (direction === 'west') {
-                        arrow.style.left = `${centerX - 118}px`;
-                        arrow.style.top = `${laneEl.offsetTop + laneCenter - 7}px`;
-                    } else if (direction === 'east') {
-                        arrow.style.left = `${centerX + 98}px`;
-                        arrow.style.top = `${laneEl.offsetTop + laneCenter - 7}px`;
-                    } else if (direction === 'north') {
-                        arrow.style.left = `${laneEl.offsetLeft + laneCenter - 6}px`;
-                        arrow.style.top = `${centerY - 118}px`;
-                    } else {
-                        arrow.style.left = `${laneEl.offsetLeft + laneCenter - 6}px`;
-                        arrow.style.top = `${centerY + 98}px`;
+                        if (direction === 'west') {
+                            arrow.style.left = `${centerX - 118 + offset}px`;
+                            arrow.style.top = `${laneEl.offsetTop + laneCenter - 7}px`;
+                        } else if (direction === 'east') {
+                            arrow.style.left = `${centerX + 114 + offset}px`;
+                            arrow.style.top = `${laneEl.offsetTop + laneCenter - 7}px`;
+                        } else if (direction === 'north') {
+                            arrow.style.left = `${laneEl.offsetLeft + laneCenter - 6}px`;
+                            arrow.style.top = `${centerY - 118 + offset}px`;
+                        } else {
+                            arrow.style.left = `${laneEl.offsetLeft + laneCenter - 6}px`;
+                            arrow.style.top = `${centerY + 114 + offset}px`;
+                        }
+                        arrowLayer.appendChild(arrow);
                     }
-                    arrowLayer.appendChild(arrow);
 
                     if (laneCfg.connected_to_intersection && laneCfg.has_traffic_light) {
                         const signal = document.createElement('div');
@@ -1134,18 +1727,18 @@
                         if (direction === 'north') {
                             const stopY = centerY - cuts.top - STOP_LINE_GAP_PX;
                             signal.style.left = `${laneEl.offsetLeft + laneCenterPx}px`;
-                            signal.style.top = `${stopY + STOP_LINE_THICKNESS_PX + SIGNAL_BEHIND_STOP_PX}px`;
+                            signal.style.top = `${stopY - SIGNAL_SIZE_PX - SIGNAL_BEHIND_STOP_PX}px`;
                         } else if (direction === 'south') {
                             const stopY = centerY + cuts.bottom + STOP_LINE_GAP_PX;
                             signal.style.left = `${laneEl.offsetLeft + laneCenterPx}px`;
-                            signal.style.top = `${stopY - SIGNAL_BEHIND_STOP_PX - SIGNAL_SIZE_PX}px`;
+                            signal.style.top = `${stopY + STOP_LINE_THICKNESS_PX + SIGNAL_BEHIND_STOP_PX}px`;
                         } else if (direction === 'west') {
                             const stopX = centerX - cuts.left - STOP_LINE_GAP_PX;
-                            signal.style.left = `${stopX + STOP_LINE_THICKNESS_PX + SIGNAL_BEHIND_STOP_PX}px`;
+                            signal.style.left = `${stopX - SIGNAL_SIZE_PX - SIGNAL_BEHIND_STOP_PX}px`;
                             signal.style.top = `${laneEl.offsetTop + laneCenterPx}px`;
                         } else {
                             const stopX = centerX + cuts.right + STOP_LINE_GAP_PX;
-                            signal.style.left = `${stopX - SIGNAL_BEHIND_STOP_PX - SIGNAL_SIZE_PX}px`;
+                            signal.style.left = `${stopX + STOP_LINE_THICKNESS_PX + SIGNAL_BEHIND_STOP_PX}px`;
                             signal.style.top = `${laneEl.offsetTop + laneCenterPx}px`;
                         }
 
@@ -1308,12 +1901,12 @@
         async function refreshLaneConnectivity(force = false) {
             try {
                 const now = Date.now();
-                if (!force && now - lastConnectivitySyncMs < 1200) {
+                if (!force && now - lastConnectivitySyncMs < 2500) {
                     return;
                 }
                 lastConnectivitySyncMs = now;
 
-                const res = await fetch('/config/api');
+                const res = await fetchWithTimeout('/config/api', {}, 1200);
                 if (!res.ok) {
                     return;
                 }
@@ -1333,6 +1926,8 @@
                     byId.set(id, approach || {});
                     const lanes = Array.isArray(approach.lanes) ? approach.lanes : [];
                     approachLaneConfigs[id] = lanes.map((lane) => ({
+                        id: Number.isFinite(Number(lane && lane.id)) ? Number(lane.id) : null,
+                        name: String(lane && lane.name || ''),
                         connected_to_intersection: !!(lane && lane.connected_to_intersection),
                         has_traffic_light: !!(lane && lane.connected_to_intersection && lane.has_traffic_light),
                         allowed_movements: Array.isArray(lane && lane.allowed_movements) ? lane.allowed_movements : ['straight']
@@ -1427,22 +2022,6 @@
         }
 
         function turnSideForVehicle(direction, v) {
-            const destination = String(v.destination_approach || '').toLowerCase();
-
-            if (direction === 'west') {
-                if (destination === 'north') return 'left';
-                if (destination === 'south') return 'right';
-            } else if (direction === 'east') {
-                if (destination === 'south') return 'left';
-                if (destination === 'north') return 'right';
-            } else if (direction === 'north') {
-                if (destination === 'east') return 'left';
-                if (destination === 'west') return 'right';
-            } else if (direction === 'south') {
-                if (destination === 'west') return 'left';
-                if (destination === 'east') return 'right';
-            }
-
             const movement = String(v.movement || '').toLowerCase();
             if (movement === 'left') return 'left';
             if (movement === 'right') return 'right';
@@ -1451,6 +2030,11 @@
 
         function drawLane(direction, vehicles, simTime) {
             const lane = document.getElementById('lane-' + direction);
+            const vehicleLayer = document.getElementById('vehicleLayer');
+            const roadWrap = document.querySelector('.road-wrap');
+            if (!lane || !vehicleLayer) {
+                return;
+            }
             lane.innerHTML = '';
 
             renderLaneSeparators(lane, direction);
@@ -1460,27 +2044,38 @@
 
             const horizontal = (direction === 'west' || direction === 'east');
             const laneLen = horizontal ? Math.max(1, lane.clientWidth - 10) : Math.max(1, lane.clientHeight - 10);
+            const cuts = junctionCuts();
             // 3 lanes in 48px (each 16px wide) handled via laneOffset()
 
-            for (const v of vehicles) {
+            const renderVehicles = Array.isArray(vehicles)
+                ? vehicles.slice(0, MAX_RENDERED_VEHICLES_PER_LANE)
+                : [];
+
+            for (const v of renderVehicles) {
+                if (!v.crossing && Number(v.position || 0) < 0) {
+                    continue;
+                }
+
                 const configuredIdx = configuredLaneIndex(v);
                 if (configuredIdx !== null && disconnectedLaneIndices[direction] && disconnectedLaneIndices[direction].has(configuredIdx)) {
                     continue;
                 }
 
+                const cprog = crossingProgress(v, simTime);
+                const visualTurning = Boolean(v.turning) && (!v.crossing || cprog < 0.78);
+
                 const car = document.createElement('div');
-                car.className = 'car' + (v.crossing ? ' crossing' : '') + (v.turning ? ' turning' : '');
+                car.className = 'car' + (v.crossing ? ' crossing' : '') + (visualTurning ? ' turning' : '');
 
                 const turnSide = turnSideForVehicle(direction, v);
-                if (turnSide === 'left' || turnSide === 'right') {
+                if (visualTurning && (turnSide === 'left' || turnSide === 'right')) {
                     const marker = document.createElement('div');
-                    marker.className = `turn-side ${turnSide}`;
+                    marker.className = turnSide === 'right' ? 'turn-side front-right' : 'turn-side front-left';
                     car.appendChild(marker);
                 }
 
                 const idx = configuredIdx !== null ? configuredIdx : laneOffsetIndex(direction, v);
-                const dist = Math.min(laneLen, laneProgress(v, simTime, laneLen, direction));
-                const cprog = crossingProgress(v, simTime);
+                const dist = Math.min(laneLen, laneProgress(v, simTime, laneLen, direction, lane, roadWrap, cuts));
 
                 // Default lane offset (perp axis) for current direction/lane
                 let laneOff = laneOffset(direction, idx, v.turning);
@@ -1488,6 +2083,7 @@
                 let drawHorizontal = horizontal;
                 let axis = dist;
                 let perp = laneOff;
+                let renderLane = lane;
                 let headingBase = 0;
                 if (direction === 'west') headingBase = 0;      // W -> E
                 if (direction === 'east') headingBase = 180;    // E -> W
@@ -1498,39 +2094,111 @@
                     const fallbackDestDir = (direction === 'west') ? 'south' :
                         (direction === 'south') ? 'east' :
                             (direction === 'east') ? 'north' : 'west';
+                    const fromApproach = direction;
+                    const toApproach = String(v.destination_approach || '').toLowerCase();
+                    const movement = String(v.movement || (v.turning ? 'right' : 'straight')).toLowerCase();
                     const destDir = travelDirectionFromDestinationApproach(v.destination_approach) || fallbackDestDir;
+                    const destLane = document.getElementById('lane-' + destDir);
+                    if (!destLane) {
+                        continue;
+                    }
+                    renderLane = destLane;
                     drawHorizontal = (destDir === 'west' || destDir === 'east');
-                    const destLaneLen = drawHorizontal ? Math.max(1, lane.clientWidth - 10) : Math.max(1, lane.clientHeight - 10);
-                    const destStop = stopLinePx(destDir, destLaneLen);
+                    const destLaneLen = drawHorizontal ? Math.max(1, destLane.clientWidth - 10) : Math.max(1, destLane.clientHeight - 10);
+                    const destStop = stopLinePx(destDir, destLaneLen, destLane, roadWrap, cuts);
                     const destLaneIdxRaw = Number(v.destination_lane_index);
                     const destLaneIdx = Number.isFinite(destLaneIdxRaw)
                         ? Math.max(0, Math.min(toLaneCountForTravelDirection(destDir) - 1, Math.floor(destLaneIdxRaw)))
                         : 0;
                     perp = laneOffset(destDir, destLaneIdx, false, 'to');
 
-                    // Move lineair vanaf de stoplijn van de doelrichting naar het einde van die rijstrook
-                    axis = destStop + cprog * (destLaneLen - destStop);
-                    if (destDir === 'east' || destDir === 'south') {
-                        axis = destLaneLen - axis;
+                    const geo = roadWrap ? junctionConnectionGeometry({
+                        from_approach: fromApproach,
+                        from_lane_index: idx,
+                        movement,
+                        to_approach: toApproach,
+                        to_lane_index: destLaneIdx
+                    }, roadWrap, cuts) : null;
+
+                    let hasGeoPath = false;
+                    if (geo && typeof geo.pathD === 'string' && geo.pathD.length > 0) {
+                        hasGeoPath = true;
+                        const ns = 'http://www.w3.org/2000/svg';
+                        const pathEl = document.createElementNS(ns, 'path');
+                        pathEl.setAttribute('d', geo.pathD);
+                        const total = pathEl.getTotalLength();
+                        const t = Math.max(0, Math.min(1, cprog));
+                        const len = total * t;
+                        const point = pathEl.getPointAtLength(Math.min(total, len));
+                        const nearEndLen = Math.max(0, total - 1.2);
+                        const nearEndPoint = pathEl.getPointAtLength(nearEndLen);
+                        const endPoint = pathEl.getPointAtLength(total);
+
+                        let renderX = point.x;
+                        let renderY = point.y;
+
+                        const tailDx = endPoint.x - nearEndPoint.x;
+                        const tailDy = endPoint.y - nearEndPoint.y;
+                        const tailMag = Math.hypot(tailDx, tailDy);
+                        const tailUx = tailMag > 1e-3 ? (tailDx / tailMag) : 0;
+                        const tailUy = tailMag > 1e-3 ? (tailDy / tailMag) : 0;
+
+                        if (t > 0.72 && tailMag > 1e-3) {
+                            const extendT = (t - 0.72) / 0.28;
+                            const extendPx = Math.max(0, Math.min(48, extendT * 48));
+                            renderX += tailUx * extendPx;
+                            renderY += tailUy * extendPx;
+                        }
+
+                        let nextX = renderX;
+                        let nextY = renderY;
+                        if (len + 0.8 <= total) {
+                            const nextPoint = pathEl.getPointAtLength(Math.min(total, len + 0.8));
+                            nextX = nextPoint.x;
+                            nextY = nextPoint.y;
+                        } else if (tailMag > 1e-3) {
+                            nextX = renderX + tailUx;
+                            nextY = renderY + tailUy;
+                        }
+
+                        car.style.left = `${renderX - 6}px`;
+                        car.style.top = `${renderY - 3.5}px`;
+                        headingBase = Math.atan2(nextY - renderY, nextX - renderX) * (180 / Math.PI);
+                        if (t >= 0.78) {
+                            headingBase = headingForDirection(destDir);
+                        }
+                        car.style.transformOrigin = 'center center';
+                        car.style.transform = `rotate(${headingBase}deg)`;
+
+                        const movementTitle = String(v.movement || (v.turning ? 'right' : 'straight'));
+                        const laneType = v.turning ? 'turn' : (idx === 0 ? 'straight-1' : 'straight-2');
+                        const laneId = (typeof v.lane_id === 'number') ? v.lane_id : '?';
+                        car.title = `id=${v.id}, lane=${laneType}, laneId=${laneId}, movement=${movementTitle}, speed=${Number(v.speed).toFixed(1)}m/s`;
+                        vehicleLayer.appendChild(car);
+                        frameRenderedVehicleCount += 1;
+                        continue;
                     }
 
-                    headingBase = 0;
-                    if (destDir === 'west') headingBase = 0;
-                    if (destDir === 'east') headingBase = 180;
-                    if (destDir === 'north') headingBase = 90;
-                    if (destDir === 'south') headingBase = -90;
+                    if (!hasGeoPath) {
+                        axis = destStop + cprog * (destLaneLen - destStop);
+                        if (destDir === 'east' || destDir === 'south') {
+                            axis = destLaneLen - axis;
+                        }
+                    }
+
+                    headingBase = headingForDirection(destDir);
                 }
 
-                if (direction === 'east' || direction === 'south') {
+                if (!v.crossing && (direction === 'east' || direction === 'south')) {
                     axis = laneLen - axis;
                 }
 
                 if (drawHorizontal) {
-                    car.style.left = `${axis}px`;
-                    car.style.top = `${perp}px`;
+                    car.style.left = `${renderLane.offsetLeft + axis}px`;
+                    car.style.top = `${renderLane.offsetTop + perp}px`;
                 } else {
-                    car.style.left = `${perp}px`;
-                    car.style.top = `${axis}px`;
+                    car.style.left = `${renderLane.offsetLeft + perp}px`;
+                    car.style.top = `${renderLane.offsetTop + axis}px`;
                 }
 
                 let heading = headingBase;
@@ -1542,54 +2210,47 @@
                 const movement = String(v.movement || (v.turning ? 'right' : 'straight'));
                 const laneId = (typeof v.lane_id === 'number') ? v.lane_id : '?';
                 car.title = `id=${v.id}, lane=${laneType}, laneId=${laneId}, movement=${movement}, speed=${Number(v.speed).toFixed(1)}m/s`;
-                lane.appendChild(car);
+                vehicleLayer.appendChild(car);
+                frameRenderedVehicleCount += 1;
             }
         }
 
-        function renderRouteDebug(snapshot) {
-            const listEl = document.getElementById('routeDebugList');
-            if (!listEl) return;
+        async function applySpawnFocus() {
+            const approachEl = document.getElementById('spawnFocusApproach');
+            const laneEl = document.getElementById('spawnFocusLane');
+            if (!approachEl || !laneEl) return;
+            const approach = String(approachEl.value || 'north').toLowerCase();
+            const laneIdx = Math.max(0, Math.floor(Number(laneEl.value || 0)));
+            await cmd(`spawn_focus:${approach}:${laneIdx}`);
+        }
 
-            const all = [];
-            for (const dir of ['north', 'east', 'south', 'west']) {
-                const laneVehicles = (snapshot.lanes && Array.isArray(snapshot.lanes[dir])) ? snapshot.lanes[dir] : [];
-                for (const v of laneVehicles) {
-                    all.push({ dir, v });
-                }
-            }
+        async function clearSpawnFocus() {
+            await cmd('spawn_focus:all');
+        }
 
-            const preview = all.slice(0, 20);
-            if (preview.length === 0) {
-                listEl.innerHTML = '<div class="route-debug-row">No vehicles</div>';
-                return;
-            }
-
-            const lines = preview.map(({ dir, v }) => {
-                const fromLane = (typeof v.lane_id === 'number') ? v.lane_id : '?';
-                const toLane = (typeof v.destination_lane_id === 'number') ? v.destination_lane_id : '?';
-                const toApproach = String(v.destination_approach || '?').toUpperCase();
-                const movement = String(v.movement || 'straight');
-                return `<div class="route-debug-row">#${v.id} ${dir.toUpperCase()} lane ${fromLane} → ${toApproach}:${toLane} (${movement})</div>`;
-            });
-
-            if (all.length > preview.length) {
-                lines.push(`<div class="route-debug-row">... ${all.length - preview.length} more</div>`);
-            }
-
-            listEl.innerHTML = lines.join('');
+        async function applySpawnRate() {
+            const spawnRateEl = document.getElementById('spawnRate');
+            if (!spawnRateEl) return;
+            const value = Math.max(0, Number(spawnRateEl.value || 0));
+            await cmd(`spawn_rate:${value}`);
         }
 
         async function cmd(name) {
-            await fetch(`/command?cmd=${name}`);
+            await fetchWithTimeout(`/command?cmd=${name}`, {}, 1200);
             await refresh();
         }
 
         async function refresh() {
+            if (refreshInFlight) {
+                return;
+            }
+            refreshInFlight = true;
             try {
                 await refreshLaneConnectivity();
 
-                const res = await fetch('/snapshot');
+                const res = await fetchWithTimeout('/snapshot', {}, 1400);
                 const s = await res.json();
+                updateOutboundGhosts(s);
 
                 document.getElementById('status').textContent = s.running ? 'running' : 'stopped';
                 document.getElementById('time').textContent = s.sim_time.toFixed(1) + 's';
@@ -1603,21 +2264,59 @@
                 document.getElementById('qtotal').textContent = total;
                 document.getElementById('qnesw').textContent = `${q.north}/${q.east}/${q.south}/${q.west}`;
 
-                ['0', '1', '2'].forEach(i => {
-                    setLaneSignal(`sig-north-${i}`, s.lights.north);
-                    setLaneSignal(`sig-east-${i}`, s.lights.east);
-                    setLaneSignal(`sig-south-${i}`, s.lights.south);
-                    setLaneSignal(`sig-west-${i}`, s.lights.west);
-                });
+                const leftProtectEl = document.getElementById('leftprotect');
+                if (leftProtectEl) {
+                    const lp = s.left_protection || {};
+                    const toFlag = (value) => value ? 'Y' : 'N';
+                    leftProtectEl.textContent = `${toFlag(lp.north)}/${toFlag(lp.east)}/${toFlag(lp.south)}/${toFlag(lp.west)}`;
+                }
 
-                drawLane('west', s.lanes.west || [], s.sim_time);
-                drawLane('east', s.lanes.east || [], s.sim_time);
-                drawLane('north', s.lanes.north || [], s.sim_time);
-                drawLane('south', s.lanes.south || [], s.sim_time);
+                const focusEl = document.getElementById('focusactive');
+                if (focusEl) {
+                    const spawnInfo = s.spawn || {};
+                    const focus = spawnInfo.focus || {};
+                    if (focus.active) {
+                        const approach = String(focus.approach || '?');
+                        const laneIndex = Number(focus.lane_index ?? 0);
+                        focusEl.textContent = `${approach}:${laneIndex}`;
+                    } else {
+                        focusEl.textContent = 'all';
+                    }
+                }
+
+                const vehicleLayer = document.getElementById('vehicleLayer');
+                if (vehicleLayer) {
+                    vehicleLayer.innerHTML = '';
+                }
+                frameRenderedVehicleCount = 0;
+
+                const lanesForRender = {
+                    west: Array.isArray(s?.lanes?.west) ? [...s.lanes.west] : [],
+                    east: Array.isArray(s?.lanes?.east) ? [...s.lanes.east] : [],
+                    north: Array.isArray(s?.lanes?.north) ? [...s.lanes.north] : [],
+                    south: Array.isArray(s?.lanes?.south) ? [...s.lanes.south] : []
+                };
+
+                drawLane('west', lanesForRender.west, s.sim_time);
+                drawLane('east', lanesForRender.east, s.sim_time);
+                drawLane('north', lanesForRender.north, s.sim_time);
+                drawLane('south', lanesForRender.south, s.sim_time);
+                renderOutboundGhosts();
                 renderDynamicSignalsAndArrows(s.lights || {});
-                renderRouteDebug(s);
+                renderCornerQueueOverlays(s);
+
+                const renderStatsEl = document.getElementById('renderstats');
+                if (renderStatsEl) {
+                    renderStatsEl.textContent = `${frameRenderedVehicleCount}/${total}`;
+                }
             } catch (error) {
+                const statusEl = document.getElementById('status');
+                if (statusEl) {
+                    statusEl.textContent = 'connection timeout';
+                }
                 logUiError('refresh failed', error);
+            } finally {
+                refreshInFlight = false;
             }
         }
 
@@ -1626,7 +2325,7 @@
             updateLaneLabels();
             updateDynamicRoadGeometry();
             drawRoadBodyOverlay();
-            setInterval(refresh, 200);
+            setInterval(refresh, 250);
             await refresh();
         }
 

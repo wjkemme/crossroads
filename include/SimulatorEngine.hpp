@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <optional>
 
 namespace crossroads
 {
@@ -70,12 +71,18 @@ namespace crossroads
         ControlMode getControlMode() const;
         void setController(std::unique_ptr<ITrafficLightController> custom_controller, ControlMode mode);
         const IntersectionConfig &getIntersectionConfig() const;
+        void setSpawnLaneFilter(const std::optional<TrafficGenerator::SpawnLaneFilter> &filter);
+        std::optional<TrafficGenerator::SpawnLaneFilter> getSpawnLaneFilter() const;
+        void setTrafficRate(double rate);
+        double getTrafficRate() const;
 
     private:
         void generateTraffic(double dt);
         void processVehicleCrossings();
         void completeVehicleCrossings();
         void advanceController(double dt);
+        void refreshEffectiveSignalState();
+        bool signalAllowsVehicle(Direction dir, const Vehicle &vehicle, const LaneConfig *lane_cfg, const IntersectionState &state) const;
         bool isLightGreen(Direction dir) const;
         std::vector<SignalGroupId> resolveActiveSignalGroups(const IntersectionState &state) const;
         bool isConfigSignalStateSafe(const IntersectionState &state) const;
@@ -90,6 +97,9 @@ namespace crossroads
         double current_time = 0.0;
         bool running = false;
         size_t safety_violations = 0;
+        IntersectionState effective_light_state{};
+        std::array<double, 4> right_turn_green_hold_until{};
+        double right_turn_min_green_seconds = 2.0;
     };
 
 } // namespace crossroads

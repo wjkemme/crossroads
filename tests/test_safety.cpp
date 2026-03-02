@@ -7,6 +7,7 @@
 #include "SimulatorEngine.hpp"
 #include "TrafficLightControllers.hpp"
 #include "IntersectionConfigJson.hpp"
+#include <nlohmann/json.hpp>
 
 using namespace crossroads;
 
@@ -237,6 +238,53 @@ TEST_CASE("BasicLightController reset works", "controller")
     state = ctrl.getCurrentState();
 
     // Should be back to NS green
+    REQUIRE(state.north == LightState::Green);
+    REQUIRE(state.south == LightState::Green);
+    REQUIRE(state.east == LightState::Red);
+    REQUIRE(state.west == LightState::Red);
+}
+
+TEST_CASE("BasicLightController ends green early when active corridor has no demand", "[controller][demand]")
+{
+    BasicLightController ctrl(10.0, 10.0);
+
+    ctrl.setDemandByDirection({false, false, true, true});
+    ctrl.tick(1.1);
+
+    auto state = ctrl.getCurrentState();
+    REQUIRE(state.north == LightState::Orange);
+    REQUIRE(state.south == LightState::Orange);
+
+    ctrl.tick(2.1);
+    state = ctrl.getCurrentState();
+    REQUIRE(state.east == LightState::Green);
+    REQUIRE(state.west == LightState::Green);
+}
+
+TEST_CASE("BasicLightController enforces max-red fairness under competing demand", "[controller][demand]")
+{
+    BasicLightController ctrl(100.0, 100.0);
+
+    ctrl.setDemandByDirection({true, true, true, true});
+    ctrl.tick(8.1);
+
+    auto state = ctrl.getCurrentState();
+    REQUIRE(state.north == LightState::Orange);
+    REQUIRE(state.south == LightState::Orange);
+
+    ctrl.tick(2.1);
+    state = ctrl.getCurrentState();
+    REQUIRE(state.east == LightState::Green);
+    REQUIRE(state.west == LightState::Green);
+}
+
+TEST_CASE("BasicLightController keeps corridor green while only that corridor has demand", "[controller][demand]")
+{
+    BasicLightController ctrl(3.0, 3.0);
+    ctrl.setDemandByDirection({true, true, false, false});
+
+    ctrl.tick(9.0);
+    auto state = ctrl.getCurrentState();
     REQUIRE(state.north == LightState::Green);
     REQUIRE(state.south == LightState::Green);
     REQUIRE(state.east == LightState::Red);
@@ -508,6 +556,656 @@ TEST_CASE("SimulatorEngine snapshot JSON includes UI fields", "[engine][ui]")
     REQUIRE(json.find("\"lights\"") != std::string::npos);
     REQUIRE(json.find("\"lanes\"") != std::string::npos);
     REQUIRE(json.find("\"north\"") != std::string::npos);
+}
+
+TEST_CASE("SimulatorEngine snapshot lights go all-red when no demand", "[engine][demand]")
+{
+    SimulatorEngine engine(0.0, 10.0, 10.0);
+    engine.start();
+    engine.tick(0.2);
+
+    auto snapshot = engine.getSnapshot();
+    REQUIRE(snapshot.metrics.total_queue_length == 0);
+    REQUIRE(snapshot.lights.north == LightState::Red);
+    REQUIRE(snapshot.lights.south == LightState::Red);
+    REQUIRE(snapshot.lights.east == LightState::Red);
+    REQUIRE(snapshot.lights.west == LightState::Red);
+    REQUIRE(snapshot.lights.turnNorthWest == LightState::Red);
+    REQUIRE(snapshot.lights.turnSouthEast == LightState::Red);
+    REQUIRE(snapshot.lights.turnEastNorth == LightState::Red);
+    REQUIRE(snapshot.lights.turnWestSouth == LightState::Red);
+}
+
+TEST_CASE("Dedicated right-turn lane actuates turn signal on demand", "[engine][demand][right-turn]")
+{
+    class AllRedController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override { return IntersectionState{}; }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {900, "N-right-only", {MovementType::Right}, true, true, true}};
+
+    SimulatorEngine engine(config, 3.0, 10.0, 10.0);
+    engine.setController(std::make_unique<AllRedController>(), SimulatorEngine::ControlMode::Basic);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+
+    engine.start();
+    bool saw_actuation = false;
+    for (int i = 0; i < 30; ++i)
+    {
+        engine.tick(0.1);
+        auto snapshot = engine.getSnapshot();
+        if (snapshot.metrics.queue_lengths[0] > 0)
+        {
+            REQUIRE(snapshot.lights.north == LightState::Red);
+            if (snapshot.lights.turnNorthWest == LightState::Green)
+            {
+                saw_actuation = true;
+                break;
+            }
+        }
+    }
+
+    REQUIRE(saw_actuation);
+}
+
+TEST_CASE("Dedicated right-turn keeps minimum green after demand drops", "[engine][demand][right-turn]")
+{
+    class AllRedController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override { return IntersectionState{}; }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {910, "N-right-only", {MovementType::Right}, true, true, true}};
+    config.approaches[2].lanes = {
+        {920, "S-straight", {MovementType::Straight}, true, true, true}};
+
+    SimulatorEngine engine(config, 3.0, 10.0, 10.0);
+    engine.setController(std::make_unique<AllRedController>(), SimulatorEngine::ControlMode::Basic);
+
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+    engine.start();
+
+    bool primed_right_turn = false;
+    for (int i = 0; i < 40; ++i)
+    {
+        engine.tick(0.1);
+        auto snapshot = engine.getSnapshot();
+        if (snapshot.metrics.queue_lengths[0] > 0 && snapshot.lights.turnNorthWest == LightState::Green)
+        {
+            primed_right_turn = true;
+            break;
+        }
+    }
+    REQUIRE(primed_right_turn);
+
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::South, 0});
+    bool north_drained_with_other_demand = false;
+    double hold_start_time = 0.0;
+
+    for (int i = 0; i < 200; ++i)
+    {
+        engine.tick(0.1);
+        auto snapshot = engine.getSnapshot();
+        const bool north_empty = snapshot.metrics.queue_lengths[0] == 0;
+        const bool some_other_demand = snapshot.metrics.total_queue_length > 0;
+        if (north_empty && some_other_demand)
+        {
+            north_drained_with_other_demand = true;
+            hold_start_time = snapshot.sim_time;
+            REQUIRE(snapshot.lights.turnNorthWest == LightState::Green);
+            break;
+        }
+    }
+
+    REQUIRE(north_drained_with_other_demand);
+
+    while (engine.getSnapshot().sim_time < hold_start_time + 1.0)
+    {
+        engine.tick(0.1);
+    }
+    REQUIRE(engine.getSnapshot().lights.turnNorthWest == LightState::Green);
+
+    while (engine.getSnapshot().sim_time < hold_start_time + 2.3)
+    {
+        engine.tick(0.1);
+    }
+    REQUIRE(engine.getSnapshot().lights.turnNorthWest == LightState::Red);
+}
+
+TEST_CASE("Mixed straight-left lane keeps dedicated left signal red under opposing conflict", "[engine][regression][left-turn]")
+{
+    class FixedConflictController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Green;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {930, "N-mixed-0", {MovementType::Straight, MovementType::Left}, true, true, true}};
+
+    SimulatorEngine engine(config, 4.0, 10.0, 10.0);
+    engine.setController(std::make_unique<FixedConflictController>(), SimulatorEngine::ControlMode::Basic);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+    engine.start();
+
+    auto hasLeftVehicleInNorth = [](const std::string &snapshot_json)
+    {
+        nlohmann::json doc = nlohmann::json::parse(snapshot_json);
+        for (const auto &vehicle : doc["lanes"]["north"])
+        {
+            if (vehicle.value("movement", std::string{}) == "left")
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto hasLeftVehicleCrossingInNorth = [](const std::string &snapshot_json)
+    {
+        nlohmann::json doc = nlohmann::json::parse(snapshot_json);
+        for (const auto &vehicle : doc["lanes"]["north"])
+        {
+            if (vehicle.value("movement", std::string{}) == "left" && vehicle.value("crossing", false))
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    bool saw_left_vehicle = false;
+    bool saw_left_signal_red = false;
+
+    for (int i = 0; i < 300; ++i)
+    {
+        engine.tick(0.1);
+        const std::string snapshot_json = engine.getSnapshotJson();
+        if (hasLeftVehicleInNorth(snapshot_json))
+        {
+            saw_left_vehicle = true;
+        }
+        nlohmann::json doc = nlohmann::json::parse(snapshot_json);
+        const std::string left_signal = doc["lights"].value("turnNorthEast", std::string{"red"});
+        if (hasLeftVehicleInNorth(snapshot_json) && left_signal == "red")
+        {
+            saw_left_signal_red = true;
+            break;
+        }
+    }
+
+    REQUIRE(saw_left_vehicle);
+    REQUIRE(saw_left_signal_red);
+}
+
+TEST_CASE("Left-only lane without traffic light never enters crossing for free or existing destination lanes", "[engine][regression][left-turn]")
+{
+    class FixedConflictController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Green;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    SECTION("free destination lane")
+    {
+        IntersectionConfig config = makeDefaultIntersectionConfig();
+        config.approaches[0].lanes = {
+            {940, "N-left-only-no-light", {MovementType::Left}, true, true, false}};
+        config.approaches[1].lanes = {
+            {941, "E-free", {MovementType::Straight}, true, true, true}};
+        config.lane_connections.clear();
+        config.lane_connections.push_back({ApproachId::North, 0, MovementType::Left, ApproachId::East, 0});
+
+        SimulatorEngine engine(config, 4.0, 10.0, 10.0);
+        engine.setController(std::make_unique<FixedConflictController>(), SimulatorEngine::ControlMode::Basic);
+        engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+        engine.start();
+
+        bool saw_left_crossing = false;
+        for (int i = 0; i < 220; ++i)
+        {
+            engine.tick(0.1);
+            nlohmann::json doc = nlohmann::json::parse(engine.getSnapshotJson());
+            for (const auto &vehicle : doc["lanes"]["north"])
+            {
+                if (vehicle.value("movement", std::string{}) == "left" && vehicle.value("crossing", false))
+                {
+                    saw_left_crossing = true;
+                }
+            }
+        }
+
+        REQUIRE(engine.getMetrics().queue_lengths[0] > 0);
+        REQUIRE(engine.getMetrics().vehicles_crossed == 0);
+        REQUIRE_FALSE(saw_left_crossing);
+    }
+
+    SECTION("existing connected destination lane")
+    {
+        IntersectionConfig config = makeDefaultIntersectionConfig();
+        config.approaches[0].lanes = {
+            {950, "N-left-only-no-light", {MovementType::Left}, true, true, false}};
+        config.approaches[1].lanes = {
+            {951, "E-main-0", {MovementType::Straight}, true, true, true},
+            {952, "E-main-1", {MovementType::Straight}, true, true, true}};
+        config.lane_connections.clear();
+        config.lane_connections.push_back({ApproachId::North, 0, MovementType::Left, ApproachId::East, 0});
+
+        SimulatorEngine engine(config, 4.0, 10.0, 10.0);
+        engine.setController(std::make_unique<FixedConflictController>(), SimulatorEngine::ControlMode::Basic);
+        engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+        engine.start();
+
+        bool saw_left_crossing = false;
+        for (int i = 0; i < 220; ++i)
+        {
+            engine.tick(0.1);
+            nlohmann::json doc = nlohmann::json::parse(engine.getSnapshotJson());
+            for (const auto &vehicle : doc["lanes"]["north"])
+            {
+                if (vehicle.value("movement", std::string{}) == "left" && vehicle.value("crossing", false))
+                {
+                    saw_left_crossing = true;
+                }
+            }
+        }
+
+        REQUIRE(engine.getMetrics().queue_lengths[0] > 0);
+        REQUIRE(engine.getMetrics().vehicles_crossed == 0);
+        REQUIRE_FALSE(saw_left_crossing);
+    }
+}
+
+TEST_CASE("Left-only lane with traffic light crosses when protected", "[engine][regression][left-turn]")
+{
+    class ProtectedLeftController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Red;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {960, "N-left-only-protected", {MovementType::Left}, true, true, true}};
+    config.approaches[1].lanes = {
+        {961, "E-main-0", {MovementType::Straight}, true, true, true},
+        {962, "E-main-1", {MovementType::Straight}, true, true, true}};
+    config.lane_connections.clear();
+    config.lane_connections.push_back({ApproachId::North, 0, MovementType::Left, ApproachId::East, 0});
+
+    SimulatorEngine engine(config, 3.0, 10.0, 10.0);
+    engine.setController(std::make_unique<ProtectedLeftController>(), SimulatorEngine::ControlMode::Basic);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+    engine.start();
+
+    bool saw_left_crossing = false;
+    for (int i = 0; i < 300; ++i)
+    {
+        engine.tick(0.1);
+        nlohmann::json doc = nlohmann::json::parse(engine.getSnapshotJson());
+        for (const auto &vehicle : doc["lanes"]["north"])
+        {
+            if (vehicle.value("movement", std::string{}) == "left" && vehicle.value("crossing", false))
+            {
+                saw_left_crossing = true;
+                break;
+            }
+        }
+        if (saw_left_crossing)
+        {
+            break;
+        }
+    }
+
+    REQUIRE(saw_left_crossing);
+}
+
+TEST_CASE("Left-only lane with traffic light uses red dedicated left signal when opposing approach is active", "[engine][regression][left-turn]")
+{
+    class UnprotectedLeftController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Green;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {970, "N-left-only-signalized", {MovementType::Left}, true, true, true}};
+    config.approaches[1].lanes = {
+        {971, "E-main-0", {MovementType::Straight}, true, true, true}};
+    config.lane_connections.clear();
+    config.lane_connections.push_back({ApproachId::North, 0, MovementType::Left, ApproachId::East, 0});
+
+    SimulatorEngine engine(config, 3.0, 10.0, 10.0);
+    engine.setController(std::make_unique<UnprotectedLeftController>(), SimulatorEngine::ControlMode::Basic);
+    engine.start();
+
+    bool saw_left_vehicle = false;
+    bool saw_left_signal_red = false;
+    for (int i = 0; i < 300; ++i)
+    {
+        engine.tick(0.1);
+        nlohmann::json doc = nlohmann::json::parse(engine.getSnapshotJson());
+        const std::string left_signal = doc["lights"].value("turnNorthEast", std::string{"red"});
+        const bool south_has_demand = doc["metrics"]["queues"].value("south", 0) > 0;
+        for (const auto &vehicle : doc["lanes"]["north"])
+        {
+            if (vehicle.value("movement", std::string{}) == "left")
+            {
+                saw_left_vehicle = true;
+                if (south_has_demand && left_signal == "red")
+                {
+                    saw_left_signal_red = true;
+                }
+            }
+        }
+    }
+
+    REQUIRE(saw_left_vehicle);
+    REQUIRE(saw_left_signal_red);
+}
+
+TEST_CASE("Dedicated left lane gets explicit left green while main can stay green", "[engine][regression][left-signal]")
+{
+    class NSMainGreenController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Red;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {980, "N-straight", {MovementType::Straight}, true, true, true},
+        {981, "N-left-only", {MovementType::Left}, true, true, true}};
+    config.approaches[2].lanes = {
+        {982, "S-straight", {MovementType::Straight}, true, true, true}};
+    config.lane_connections.clear();
+    config.lane_connections.push_back({ApproachId::North, 0, MovementType::Straight, ApproachId::South, 0});
+    config.lane_connections.push_back({ApproachId::North, 1, MovementType::Left, ApproachId::East, 0});
+
+    SimulatorEngine engine(config, 4.0, 10.0, 10.0);
+    engine.setController(std::make_unique<NSMainGreenController>(), SimulatorEngine::ControlMode::Basic);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 1});
+    engine.start();
+
+    bool saw_left_crossing = false;
+    bool saw_left_green = false;
+    for (int i = 0; i < 280; ++i)
+    {
+        engine.tick(0.1);
+        auto snapshot = engine.getSnapshot();
+        if (snapshot.lights.turnNorthEast == LightState::Green)
+        {
+            saw_left_green = true;
+        }
+
+        nlohmann::json doc = nlohmann::json::parse(engine.getSnapshotJson());
+        for (const auto &vehicle : doc["lanes"]["north"])
+        {
+            if (vehicle.value("movement", std::string{}) == "left" && vehicle.value("crossing", false))
+            {
+                saw_left_crossing = true;
+                break;
+            }
+        }
+        if (saw_left_crossing)
+        {
+            break;
+        }
+    }
+
+    REQUIRE(saw_left_green);
+    REQUIRE(saw_left_crossing);
+}
+
+TEST_CASE("Effective lights set opposite approach red when no demand there", "[engine][regression][demand]")
+{
+    SimulatorEngine engine(2.5, 10.0, 10.0);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+    engine.start();
+
+    bool saw_north_demand = false;
+    bool saw_south_forced_red = false;
+    for (int i = 0; i < 220; ++i)
+    {
+        engine.tick(0.1);
+        auto snapshot = engine.getSnapshot();
+        if (snapshot.metrics.queue_lengths[0] > 0)
+        {
+            saw_north_demand = true;
+            if (snapshot.metrics.queue_lengths[2] == 0 && snapshot.lights.south == LightState::Red)
+            {
+                saw_south_forced_red = true;
+                break;
+            }
+        }
+    }
+
+    REQUIRE(saw_north_demand);
+    REQUIRE(saw_south_forced_red);
+}
+
+TEST_CASE("Dedicated left crossing keeps opposing straight red for safety", "[engine][regression][left-signal]")
+{
+    class NSMainGreenController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Green;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {990, "N-left-only", {MovementType::Left}, true, true, true}};
+    config.approaches[2].lanes = {
+        {991, "S-straight", {MovementType::Straight}, true, true, true}};
+    config.lane_connections.clear();
+    config.lane_connections.push_back({ApproachId::North, 0, MovementType::Left, ApproachId::East, 0});
+    config.lane_connections.push_back({ApproachId::South, 0, MovementType::Straight, ApproachId::North, 0});
+
+    SimulatorEngine engine(config, 4.0, 10.0, 10.0);
+    engine.setController(std::make_unique<NSMainGreenController>(), SimulatorEngine::ControlMode::Basic);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+    engine.start();
+
+    bool saw_left_crossing = false;
+    bool saw_opposing_red_during_crossing = false;
+    for (int i = 0; i < 320; ++i)
+    {
+        engine.tick(0.1);
+        nlohmann::json doc = nlohmann::json::parse(engine.getSnapshotJson());
+        for (const auto &vehicle : doc["lanes"]["north"])
+        {
+            if (vehicle.value("movement", std::string{}) == "left" && vehicle.value("crossing", false))
+            {
+                saw_left_crossing = true;
+                if (doc["lights"].value("south", std::string{"red"}) == "red")
+                {
+                    saw_opposing_red_during_crossing = true;
+                }
+            }
+        }
+        if (saw_left_crossing && saw_opposing_red_during_crossing)
+        {
+            break;
+        }
+    }
+
+    REQUIRE(saw_left_crossing);
+    REQUIRE(saw_opposing_red_during_crossing);
+}
+
+TEST_CASE("North left demand under green forces south main red", "[engine][regression][left-signal]")
+{
+    class NSMainGreenController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.north = LightState::Green;
+            s.south = LightState::Green;
+            s.east = LightState::Red;
+            s.west = LightState::Red;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {997, "N-left-only", {MovementType::Left}, true, true, true}};
+    config.approaches[2].lanes = {
+        {998, "S-straight", {MovementType::Straight}, true, true, true}};
+    config.lane_connections.clear();
+    config.lane_connections.push_back({ApproachId::North, 0, MovementType::Left, ApproachId::East, 0});
+    config.lane_connections.push_back({ApproachId::South, 0, MovementType::Straight, ApproachId::North, 0});
+
+    SimulatorEngine engine(config, 4.0, 10.0, 10.0);
+    engine.setController(std::make_unique<NSMainGreenController>(), SimulatorEngine::ControlMode::Basic);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+    engine.start();
+
+    bool saw_left_vehicle = false;
+    bool saw_south_red = false;
+    for (int i = 0; i < 220; ++i)
+    {
+        engine.tick(0.1);
+        nlohmann::json doc = nlohmann::json::parse(engine.getSnapshotJson());
+        for (const auto &vehicle : doc["lanes"]["north"])
+        {
+            if (vehicle.value("movement", std::string{}) == "left")
+            {
+                saw_left_vehicle = true;
+                if (doc["lights"].value("south", std::string{"red"}) == "red")
+                {
+                    saw_south_red = true;
+                }
+            }
+        }
+        if (saw_left_vehicle && saw_south_red)
+        {
+            break;
+        }
+    }
+
+    REQUIRE(saw_left_vehicle);
+    REQUIRE(saw_south_red);
+}
+
+TEST_CASE("Exclusive dedicated right turn can actuate without waiting full opposing red cycle", "[engine][regression][right-turn]")
+{
+    class OpposingGreenController : public ITrafficLightController
+    {
+    public:
+        void tick(double) override {}
+        IntersectionState getCurrentState() const override
+        {
+            IntersectionState s{};
+            s.east = LightState::Green;
+            return s;
+        }
+        void reset() override {}
+    };
+
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {995, "N-right-only", {MovementType::Right}, true, true, true}};
+    config.approaches[3].lanes = {
+        {996, "W-exclusive-target", {MovementType::Straight}, true, true, true}};
+    config.lane_connections.clear();
+    config.lane_connections.push_back({ApproachId::North, 0, MovementType::Right, ApproachId::West, 0});
+
+    SimulatorEngine engine(config, 3.0, 10.0, 10.0);
+    engine.setController(std::make_unique<OpposingGreenController>(), SimulatorEngine::ControlMode::Basic);
+    engine.setSpawnLaneFilter(TrafficGenerator::SpawnLaneFilter{ApproachId::North, 0});
+    engine.start();
+
+    bool saw_right_green = false;
+    for (int i = 0; i < 80; ++i)
+    {
+        engine.tick(0.1);
+        auto snapshot = engine.getSnapshot();
+        if (snapshot.metrics.queue_lengths[0] > 0 && snapshot.lights.turnNorthWest == LightState::Green)
+        {
+            saw_right_green = true;
+            break;
+        }
+    }
+
+    REQUIRE(saw_right_green);
 }
 
 TEST_CASE("SafetyChecker validates default configurable intersection", "[safety][config]")
@@ -831,4 +1529,39 @@ TEST_CASE("TrafficGenerator resolves vehicle destination from lane connections",
         REQUIRE(vehicle.destination_lane_index == 1);
         REQUIRE(vehicle.destination_lane_id == laneIdFor(ApproachId::East, 1));
     }
+}
+
+TEST_CASE("Mixed north lane 0 keeps straight+left intents from config", "[traffic][config][movement][regression]")
+{
+    IntersectionConfig config = makeDefaultIntersectionConfig();
+    config.approaches[0].lanes = {
+        {800, "N-mixed-0", {MovementType::Straight, MovementType::Left}, true, true, true}};
+
+    TrafficGenerator gen(config, 1.0);
+    bool seen_straight = false;
+    bool seen_left = false;
+
+    for (int i = 0; i < 40; ++i)
+    {
+        const double current_time = static_cast<double>(i) * 0.25;
+        gen.generateTraffic(0.25, current_time);
+
+        while (auto *next = gen.peekNextVehicle(Direction::North))
+        {
+            REQUIRE(next->lane_id == 800);
+            REQUIRE((next->movement == MovementType::Straight || next->movement == MovementType::Left));
+
+            if (next->movement == MovementType::Straight)
+                seen_straight = true;
+            if (next->movement == MovementType::Left)
+                seen_left = true;
+
+            const uint32_t id = next->id;
+            REQUIRE(gen.startCrossing(Direction::North, id, current_time));
+            REQUIRE(gen.completeCrossing(id, current_time + 1.0));
+        }
+    }
+
+    REQUIRE(seen_straight);
+    REQUIRE(seen_left);
 }

@@ -11,6 +11,8 @@ namespace crossroads
         constexpr double STOPPED_GAP_METERS = 2.0;                                           // 2m bumper-bumper bij stilstand
         constexpr double MIN_FRONT_DISTANCE_METERS = CAR_LENGTH_METERS + STOPPED_GAP_METERS; // 6m front-to-front
         constexpr double FOLLOWING_TIME_SECONDS = 1.5;                                       // 1.5s following bij rijden
+        constexpr size_t MAX_QUEUE_SIZE_PER_DIRECTION = 60;
+        constexpr size_t MAX_QUEUE_SIZE_PER_LANE = 12;
 
         ApproachId approachFromDirection(Direction dir)
         {
@@ -79,7 +81,7 @@ namespace crossroads
         vehicle.movement = movement;
         vehicle.turning = (movement != MovementType::Straight);
 
-        bool used_explicit_connection = false;
+        bool route_resolved = true;
         ApproachId destination_approach = destinationApproachFor(from_approach, movement);
         uint16_t destination_lane_index = from_lane_index;
 
@@ -87,7 +89,6 @@ namespace crossroads
         {
             destination_approach = connection->to_approach;
             destination_lane_index = connection->to_lane_index;
-            used_explicit_connection = true;
         }
 
         vehicle.destination_approach = destination_approach;
@@ -97,7 +98,7 @@ namespace crossroads
         if (destination_approach_index >= intersection_config.approaches.size())
         {
             vehicle.destination_lane_id = 0;
-            return used_explicit_connection;
+            return false;
         }
 
         const auto &destination_approach_cfg = intersection_config.approaches[destination_approach_index];
@@ -105,13 +106,13 @@ namespace crossroads
         if (destination_lane_count == 0)
         {
             vehicle.destination_lane_id = 0;
-            return used_explicit_connection;
+            return false;
         }
 
         size_t clamped_lane_index = std::min<size_t>(destination_lane_index, destination_lane_count - 1);
         vehicle.destination_lane_index = static_cast<uint16_t>(clamped_lane_index);
         vehicle.destination_lane_id = laneIdFor(destination_approach, clamped_lane_index);
-        return used_explicit_connection;
+        return route_resolved;
     }
 
     size_t TrafficGenerator::chooseSpawnMovementIndex(const std::vector<MovementType> &movements, uint32_t vehicle_id) const
@@ -249,6 +250,12 @@ namespace crossroads
             size_t current_index = static_cast<size_t>(std::distance(approach->lanes.begin(), current_it));
             bool movement_allowed = laneAllowsMovement(*current_it, vehicle.movement);
 
+            auto fallbackToCurrentLaneMovement = [&]()
+            {
+                vehicle.movement = MovementType::Straight;
+                vehicle.turning = false;
+            };
+
             if (movement_allowed)
             {
                 resolveVehicleRoute(vehicle,
@@ -260,19 +267,21 @@ namespace crossroads
 
             if (!vehicle.lane_change_allowed)
             {
+                fallbackToCurrentLaneMovement();
                 resolveVehicleRoute(vehicle,
                                     approach->id,
                                     static_cast<uint16_t>(current_index),
-                                    MovementType::Straight);
+                                    vehicle.movement);
                 continue;
             }
 
             if (vehicle.position_in_lane > 55.0)
             {
+                fallbackToCurrentLaneMovement();
                 resolveVehicleRoute(vehicle,
                                     approach->id,
                                     static_cast<uint16_t>(current_index),
-                                    MovementType::Straight);
+                                    vehicle.movement);
                 continue;
             }
 
@@ -360,6 +369,8 @@ namespace crossroads
 
     void TrafficGenerator::generateTraffic(double dt_seconds, double current_time)
     {
+        enforceSpawnLaneFilterOnExistingQueues();
+
         time_accumulated += dt_seconds;
         double spawn_interval = getNextSpawnInterval();
 
@@ -372,11 +383,17 @@ namespace crossroads
 
             for (Direction dir : directions)
             {
-                Vehicle v(next_vehicle_id++, dir, current_time);
+                const uint32_t candidate_id = next_vehicle_id;
+                Vehicle v(candidate_id, dir, current_time);
+                ApproachId approach = approachFromDirection(dir);
+
+                if (spawn_lane_filter.has_value() && spawn_lane_filter->approach != approach)
+                {
+                    continue;
+                }
 
                 if (use_configured_spawns)
                 {
-                    ApproachId approach = approachFromDirection(dir);
                     size_t approach_idx = approachArrayIndex(approach);
                     const auto &approach_cfg = intersection_config.approaches[approach_idx];
 
@@ -390,6 +407,15 @@ namespace crossroads
                             {
                                 connected_lane_indices.push_back(lane_idx);
                             }
+                        }
+
+                        if (spawn_lane_filter.has_value() && spawn_lane_filter->approach == approach)
+                        {
+                            connected_lane_indices.erase(
+                                std::remove_if(connected_lane_indices.begin(), connected_lane_indices.end(),
+                                               [&](size_t lane_idx)
+                                               { return lane_idx != spawn_lane_filter->lane_index; }),
+                                connected_lane_indices.end());
                         }
 
                         if (connected_lane_indices.empty())
@@ -461,39 +487,107 @@ namespace crossroads
 
                 if (!use_configured_spawns)
                 {
-                    v.turning = (v.id % 5 == 0);
-
-                    if (v.turning)
+                    if (spawn_lane_filter.has_value() && spawn_lane_filter->approach == approach)
                     {
-                        v.queue_index = 2;
-                        v.lane_id = static_cast<LaneId>(static_cast<int>(dir) * 100 + 2);
-                        v.movement = MovementType::Right;
+                        const uint16_t focused_lane = spawn_lane_filter->lane_index;
+                        if (focused_lane > 2)
+                        {
+                            continue;
+                        }
+
+                        v.queue_index = static_cast<uint8_t>(focused_lane);
+                        v.lane_id = static_cast<LaneId>(static_cast<int>(dir) * 100 + focused_lane);
+                        v.turning = (focused_lane == 2);
+                        v.movement = v.turning ? MovementType::Right : MovementType::Straight;
                     }
                     else
                     {
-                        auto &queue = getQueueByDirection(dir);
-                        size_t straight_count = 0;
-                        for (const auto &veh : queue)
+                        v.turning = (v.id % 5 == 0);
+
+                        if (v.turning)
                         {
-                            if (!veh.turning)
-                                straight_count++;
+                            v.queue_index = 2;
+                            v.lane_id = static_cast<LaneId>(static_cast<int>(dir) * 100 + 2);
+                            v.movement = MovementType::Right;
                         }
-                        v.queue_index = straight_count % 2;
-                        v.lane_id = static_cast<LaneId>(static_cast<int>(dir) * 100 + v.queue_index);
-                        v.movement = MovementType::Straight;
+                        else
+                        {
+                            auto &queue = getQueueByDirection(dir);
+                            size_t straight_count = 0;
+                            for (const auto &veh : queue)
+                            {
+                                if (!veh.turning)
+                                    straight_count++;
+                            }
+                            v.queue_index = straight_count % 2;
+                            v.lane_id = static_cast<LaneId>(static_cast<int>(dir) * 100 + v.queue_index);
+                            v.movement = MovementType::Straight;
+                        }
                     }
 
-                    ApproachId from_approach = approachFromDirection(dir);
-                    v.destination_approach = destinationApproachFor(from_approach, v.movement);
+                    v.destination_approach = destinationApproachFor(approach, v.movement);
                     v.destination_lane_index = v.queue_index;
                     v.destination_lane_id = laneIdFor(v.destination_approach, v.destination_lane_index);
                 }
 
                 auto &queue = getQueueByDirection(dir);
-                if (!queue.empty())
+
+                if (spawn_lane_filter.has_value())
                 {
-                    v.position_in_lane = queue.back().position_in_lane - MIN_FRONT_DISTANCE_METERS;
+                    const auto &filter = *spawn_lane_filter;
+                    if (filter.approach != approach)
+                    {
+                        continue;
+                    }
+
+                    size_t spawned_lane_index = static_cast<size_t>(v.queue_index);
+                    if (use_configured_spawns)
+                    {
+                        size_t approach_idx = approachArrayIndex(approach);
+                        const auto &approach_cfg = intersection_config.approaches[approach_idx];
+                        auto lane_it = std::find_if(approach_cfg.lanes.begin(), approach_cfg.lanes.end(),
+                                                    [&](const LaneConfig &lane)
+                                                    { return lane.id == v.lane_id; });
+                        if (lane_it == approach_cfg.lanes.end())
+                        {
+                            continue;
+                        }
+                        spawned_lane_index = static_cast<size_t>(std::distance(approach_cfg.lanes.begin(), lane_it));
+                    }
+
+                    if (spawned_lane_index != static_cast<size_t>(filter.lane_index))
+                    {
+                        continue;
+                    }
                 }
+
+                if (queue.size() >= MAX_QUEUE_SIZE_PER_DIRECTION)
+                {
+                    continue;
+                }
+
+                const size_t same_lane_count = static_cast<size_t>(std::count_if(queue.begin(), queue.end(),
+                                                                                 [&](const Vehicle &other)
+                                                                                 { return other.lane_id == v.lane_id; }));
+                if (same_lane_count >= MAX_QUEUE_SIZE_PER_LANE)
+                {
+                    continue;
+                }
+
+                const bool lane_entry_blocked = std::any_of(queue.begin(), queue.end(),
+                                                            [&](const Vehicle &other)
+                                                            {
+                                                                return other.lane_id == v.lane_id &&
+                                                                       other.position_in_lane < MIN_FRONT_DISTANCE_METERS;
+                                                            });
+                if (lane_entry_blocked)
+                {
+                    continue;
+                }
+
+                v.id = next_vehicle_id++;
+                total_generated++;
+                v.position_in_lane = 0.0;
                 queue.push_back(v);
             }
         }
@@ -520,10 +614,13 @@ namespace crossroads
         {
             auto &queue = getQueueByDirection(dir);
 
-            if (!queue.empty() && queue.front().id == vehicle_id)
+            auto it = std::find_if(queue.begin(), queue.end(),
+                                   [vehicle_id](const Vehicle &vehicle)
+                                   { return vehicle.id == vehicle_id; });
+            if (it != queue.end())
             {
-                Vehicle crossed = queue.front();
-                queue.pop_front();
+                Vehicle crossed = *it;
+                queue.erase(it);
                 crossed.exit_time = current_time;
                 crossed_vehicles.push_back(crossed);
                 return true;
@@ -584,9 +681,12 @@ namespace crossroads
         crossed_vehicles.clear();
         time_accumulated = 0.0;
         next_vehicle_id = 1;
+        total_generated = 0;
     }
 
-    void TrafficGenerator::updateVehicleSpeeds(double dt_seconds, const std::array<bool, 4> &lane_can_move)
+    void TrafficGenerator::updateVehicleSpeeds(double dt_seconds,
+                                               const std::array<bool, 4> &lane_can_move,
+                                               const std::function<bool(Direction, const Vehicle &)> &can_vehicle_move_override)
     {
         const double STOP_LINE_POSITION = 70.0;
         const double STOP_TARGET = STOPLINE_TARGET_METERS; // 0.5m voor de streep
@@ -597,7 +697,6 @@ namespace crossroads
         {
             Direction d = static_cast<Direction>(dir);
             auto &queue = getQueueByDirection(d);
-            bool can_move = lane_can_move[dir];
 
             maybeApplyLaneChanges(d, queue);
 
@@ -607,6 +706,12 @@ namespace crossroads
 
                 if (vehicle.isCrossing())
                     continue; // Already crossing, skip speed updates
+
+                bool can_move = lane_can_move[dir];
+                if (can_vehicle_move_override)
+                {
+                    can_move = can_vehicle_move_override(d, vehicle);
+                }
 
                 double target_speed = MAX_SPEED;
 
@@ -757,6 +862,75 @@ namespace crossroads
         }
 
         return states;
+    }
+
+    void TrafficGenerator::setSpawnLaneFilter(const std::optional<SpawnLaneFilter> &filter)
+    {
+        spawn_lane_filter = filter;
+        spawn_lane_cursor = {0, 0, 0, 0};
+        enforceSpawnLaneFilterOnExistingQueues();
+    }
+
+    std::optional<TrafficGenerator::SpawnLaneFilter> TrafficGenerator::getSpawnLaneFilter() const
+    {
+        return spawn_lane_filter;
+    }
+
+    void TrafficGenerator::setArrivalRate(double rate)
+    {
+        arrival_rate = std::max(0.0, rate);
+    }
+
+    double TrafficGenerator::getArrivalRate() const
+    {
+        return arrival_rate;
+    }
+
+    void TrafficGenerator::enforceSpawnLaneFilterOnExistingQueues()
+    {
+        if (!spawn_lane_filter.has_value())
+        {
+            return;
+        }
+
+        const auto target = *spawn_lane_filter;
+        const Direction target_direction =
+            (target.approach == ApproachId::North) ? Direction::North : (target.approach == ApproachId::South) ? Direction::South
+                                                                    : (target.approach == ApproachId::East)    ? Direction::East
+                                                                                                               : Direction::West;
+
+        LaneId focused_lane_id = 0;
+        bool has_focused_lane_id = false;
+        if (use_configured_spawns)
+        {
+            if (const ApproachConfig *approach_cfg = getApproachConfig(target_direction))
+            {
+                if (target.lane_index < approach_cfg->lanes.size())
+                {
+                    focused_lane_id = approach_cfg->lanes[target.lane_index].id;
+                    has_focused_lane_id = true;
+                }
+            }
+        }
+        if (!has_focused_lane_id)
+        {
+            focused_lane_id = static_cast<LaneId>(static_cast<int>(target_direction) * 100 + target.lane_index);
+        }
+
+        for (Direction dir : {Direction::North, Direction::South, Direction::East, Direction::West})
+        {
+            auto &queue = getQueueByDirection(dir);
+            if (dir != target_direction)
+            {
+                queue.clear();
+                continue;
+            }
+
+            queue.erase(std::remove_if(queue.begin(), queue.end(),
+                                       [&](const Vehicle &v)
+                                       { return v.lane_id != focused_lane_id; }),
+                        queue.end());
+        }
     }
 
 } // namespace crossroads

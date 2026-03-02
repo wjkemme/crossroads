@@ -2,9 +2,9 @@
 
 ## Project Overview
 - **Project Name**: Crossroads
-- **Language**: C++
+- **Language**: C++20
 - **Code standard**: clean code (Robert C. Martin)
-- **Complexity**: Medium to low complexity, with a focus on modular design and maintainability
+- **Complexity**: Medium to low complexity, with a focus on modular design and maintainability. The project is structured to allow for incremental development, starting with a basic traffic generator and control algorithm, and evolving towards more sophisticated features such as safety checks, multiple control algorithms, and advanced visualization. The use of C++20 enables modern programming practices while maintaining performance and efficiency. Keep the codebase clean and well-documented to facilitate future enhancements and ensure that new contributors can easily understand the architecture and design decisions. Methods should be concise and focused on a single responsibility, adhering to the principles of clean code to promote readability and maintainability throughout the project lifecycle.
 - **Build System**: cmake
 - **Database**: ORM: sqlite_orm
 - **Purpose**:
@@ -35,6 +35,7 @@ crossroads/
 - **Safety**: Before we start working on smarter control algorithms, we need to ensure that the crossroads are always in a safe state. Therefore, in between the control algorithm and the interface to the traffic lights, a safety checker will be added. The safety checker warrants the consistency of commands to the traffic lights. The safety checker implements a series of rules and rigorously checks that none of the rules are violated at any time.
 - **Safety**: Before we start working on smarter control algorithms, we need to ensure that the crossroads are always in a safe state. Therefore, in between the control algorithm and the interface to the traffic lights, a safety checker will be added. The safety checker warrants the consistency of commands to the traffic lights. The safety checker implements a series of rules and rigorously checks that none of the rules are violated at any time.
 - This approach ensures that conflicting signals—such as multiple directions showing green at the same time—are systematically prevented. The safety checker acts as a safeguard layer, monitoring all light changes and enforcing critical safety constraints regardless of the logic produced by the control algorithm. By introducing this component, the integrity and reliability of the intersection control system are significantly strengthened, reducing the risk of accidents caused by software errors or unforeseen circumstances.
+- **Architectural boundary (mandatory)**: Safety logic validates and constrains **traffic light states/transitions only**. Safety must **never** alter road layout semantics, lane connectivity, or allowed movements. Those are defined exclusively by the intersection configuration and interpreted by routing/simulation modules.
 - ORM: sqlite_orm
 - gebruik tussen server en client UI communicatie WebSocket/REST
 - CMake
