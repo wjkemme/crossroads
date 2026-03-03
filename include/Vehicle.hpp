@@ -77,9 +77,9 @@ namespace crossroads
         double getCrossingDuration(size_t queue_length) const
         {
             double density = std::min(1.0, queue_length / 10.0);
-            double base = 2.5 + (density * 2.0); // 2.5-4.5 sec range
+            double base = 2.2 + (density * 1.6); // 2.2-3.8 sec range
             // Turning vehicles travel longer arc path, need more time
-            return turning ? base * 1.6 : base;
+            return turning ? base * 1.3 : base;
         }
     };
 

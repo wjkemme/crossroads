@@ -868,13 +868,13 @@ button:hover {
     width: 12px;
     height: 7px;
     border-radius: 2px;
-    background: #60a5fa;
+    background: var(--car-color, #60a5fa);
     box-shadow: 0 0 0 2px rgba(30, 41, 59, 0.9);
     overflow: hidden;
 }
 
 .car.crossing {
-    background: #a78bfa;
+    box-shadow: 0 0 0 2px rgba(30, 41, 59, 0.95), 0 0 6px rgba(148, 163, 184, 0.35);
 }
 
 .car.turning {
