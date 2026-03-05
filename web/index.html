@@ -120,6 +120,31 @@
 
         </div>
 
+        <div class="scheduler-debug card">
+            <h3>Scheduler Debug</h3>
+            <div class="small" id="schedulerSummary">no scheduler data</div>
+            <div class="scheduler-table-wrap">
+                <table class="scheduler-table" id="schedulerTable">
+                    <thead>
+                        <tr>
+                            <th>Route</th>
+                            <th>Demand</th>
+                            <th>Wait (s)</th>
+                            <th>Score</th>
+                            <th>Green</th>
+                            <th>Selected</th>
+                            <th>Parallel</th>
+                            <th>Blocked</th>
+                            <th>Started</th>
+                            <th>Reason</th>
+                            <th>Conflicts</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -2331,6 +2356,8 @@
                     }
                 }
 
+                renderSchedulerDebug(s);
+
                 const vehicleLayer = document.getElementById('vehicleLayer');
                 if (vehicleLayer) {
                     vehicleLayer.innerHTML = '';
@@ -2378,6 +2405,45 @@
 
         bootUi();
         window.addEventListener('resize', updateDynamicRoadGeometry);
+
+        function renderSchedulerDebug(snapshot) {
+            const summaryEl = document.getElementById('schedulerSummary');
+            const table = document.getElementById('schedulerTable');
+            const body = table ? table.querySelector('tbody') : null;
+            if (!summaryEl || !body) {
+                return;
+            }
+
+            const scheduler = snapshot && snapshot.scheduler ? snapshot.scheduler : null;
+            if (!scheduler || !Array.isArray(scheduler.routes)) {
+                summaryEl.textContent = 'no scheduler data';
+                body.innerHTML = '';
+                return;
+            }
+
+            const anchor = String(scheduler.anchor_route || '').trim();
+            const wmax = Number(scheduler.wmax_seconds || 0);
+            summaryEl.textContent = `anchor=${anchor || '-'} | Wmax=${Number.isFinite(wmax) ? wmax.toFixed(1) : '-'}s`;
+
+            body.innerHTML = scheduler.routes.map((route) => {
+                const conflicts = Array.isArray(route.conflicts) ? route.conflicts.join(', ') : '';
+                const wait = Number(route.wait_seconds || 0);
+                const score = Number(route.priority_score || 0);
+                return `<tr>
+                    <td>${route.route || '-'}</td>
+                    <td>${route.waiting_demand ? 'Y' : 'N'}</td>
+                    <td>${Number.isFinite(wait) ? wait.toFixed(1) : '0.0'}</td>
+                    <td>${Number.isFinite(score) ? score.toFixed(1) : '0.0'}</td>
+                    <td>${route.green_active ? 'Y' : 'N'}</td>
+                    <td>${route.selected ? 'Y' : 'N'}</td>
+                    <td>${route.parallel_active ? 'Y' : 'N'}</td>
+                    <td>${route.blocked_by_anchor ? 'Y' : 'N'}</td>
+                    <td>${Number.isFinite(Number(route.vehicles_started_this_green)) ? Number(route.vehicles_started_this_green) : 0}</td>
+                    <td>${route.activation_reason || '-'}</td>
+                    <td>${conflicts || '-'}</td>
+                </tr>`;
+            }).join('');
+        }
     </script>
 </body>
 

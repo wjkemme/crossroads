@@ -73,7 +73,19 @@ namespace crossroads
                                           connection.from_lane_index == from_lane_index &&
                                           connection.movement == movement;
                                });
-        return it == intersection_config.lane_connections.end() ? nullptr : &(*it);
+        if (it != intersection_config.lane_connections.end())
+        {
+            return &(*it);
+        }
+
+        auto movement_it = std::find_if(intersection_config.lane_connections.begin(),
+                                        intersection_config.lane_connections.end(),
+                                        [&](const LaneConnectionConfig &connection)
+                                        {
+                                            return connection.from_approach == from_approach &&
+                                                   connection.movement == movement;
+                                        });
+        return movement_it == intersection_config.lane_connections.end() ? nullptr : &(*movement_it);
     }
 
     bool TrafficGenerator::resolveVehicleRoute(Vehicle &vehicle, ApproachId from_approach, uint16_t from_lane_index, MovementType movement) const
@@ -81,15 +93,15 @@ namespace crossroads
         vehicle.movement = movement;
         vehicle.turning = (movement != MovementType::Straight);
 
-        bool route_resolved = true;
-        ApproachId destination_approach = destinationApproachFor(from_approach, movement);
-        uint16_t destination_lane_index = from_lane_index;
-
-        if (const auto *connection = findLaneConnection(from_approach, from_lane_index, movement))
+        const auto *connection = findLaneConnection(from_approach, from_lane_index, movement);
+        if (connection == nullptr)
         {
-            destination_approach = connection->to_approach;
-            destination_lane_index = connection->to_lane_index;
+            vehicle.destination_lane_id = 0;
+            return false;
         }
+
+        ApproachId destination_approach = connection->to_approach;
+        uint16_t destination_lane_index = connection->to_lane_index;
 
         vehicle.destination_approach = destination_approach;
         vehicle.destination_lane_index = destination_lane_index;
@@ -112,7 +124,7 @@ namespace crossroads
         size_t clamped_lane_index = std::min<size_t>(destination_lane_index, destination_lane_count - 1);
         vehicle.destination_lane_index = static_cast<uint16_t>(clamped_lane_index);
         vehicle.destination_lane_id = laneIdFor(destination_approach, clamped_lane_index);
-        return route_resolved;
+        return true;
     }
 
     size_t TrafficGenerator::chooseSpawnMovementIndex(const std::vector<MovementType> &movements, uint32_t vehicle_id) const
@@ -463,19 +475,25 @@ namespace crossroads
                                                  static_cast<uint16_t>(preferred_lane_idx),
                                                  v.movement))
                         {
+                            bool resolved = false;
                             if (!preferred_lane_cfg.allowed_movements.empty())
                             {
-                                resolveVehicleRoute(v,
-                                                    approach,
-                                                    static_cast<uint16_t>(preferred_lane_idx),
-                                                    preferred_lane_cfg.allowed_movements.front());
+                                resolved = resolveVehicleRoute(v,
+                                                               approach,
+                                                               static_cast<uint16_t>(preferred_lane_idx),
+                                                               preferred_lane_cfg.allowed_movements.front());
                             }
                             else
                             {
-                                resolveVehicleRoute(v,
-                                                    approach,
-                                                    static_cast<uint16_t>(preferred_lane_idx),
-                                                    MovementType::Straight);
+                                resolved = resolveVehicleRoute(v,
+                                                               approach,
+                                                               static_cast<uint16_t>(preferred_lane_idx),
+                                                               MovementType::Straight);
+                            }
+
+                            if (!resolved)
+                            {
+                                continue;
                             }
                         }
                     }

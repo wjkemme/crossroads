@@ -26,6 +26,23 @@ namespace crossroads
     {
         std::unordered_set<LaneId> seen_lanes;
         std::unordered_set<SignalGroupId> seen_groups;
+        auto find_lane_for_id = [&](LaneId lane_id, ApproachId &approach, const LaneConfig *&lane_cfg)
+        {
+            for (const auto &entry : config.approaches)
+            {
+                auto found = std::find_if(entry.lanes.begin(), entry.lanes.end(),
+                                          [lane_id](const LaneConfig &lane)
+                                          { return lane.id == lane_id; });
+                if (found != entry.lanes.end())
+                {
+                    approach = entry.id;
+                    lane_cfg = &(*found);
+                    return true;
+                }
+            }
+            return false;
+        };
+
         for (const auto &approach : config.approaches)
         {
             if (approach.lanes.empty())
@@ -63,6 +80,55 @@ namespace crossroads
                 if (seen_lanes.find(lane) == seen_lanes.end())
                 {
                     return false;
+                }
+            }
+
+            struct MovementRef
+            {
+                ApproachId from;
+                MovementType movement;
+            };
+
+            std::vector<MovementRef> group_movements;
+            for (LaneId lane : group.controlled_lanes)
+            {
+                ApproachId approach;
+                const LaneConfig *lane_cfg = nullptr;
+                if (!find_lane_for_id(lane, approach, lane_cfg) || lane_cfg == nullptr)
+                {
+                    return false;
+                }
+
+                bool lane_has_supported_group_movement = false;
+                for (MovementType movement : group.green_movements)
+                {
+                    const bool lane_supports_movement = std::find(lane_cfg->allowed_movements.begin(),
+                                                                  lane_cfg->allowed_movements.end(),
+                                                                  movement) != lane_cfg->allowed_movements.end();
+                    if (!lane_supports_movement)
+                    {
+                        continue;
+                    }
+
+                    group_movements.push_back({approach, movement});
+                    lane_has_supported_group_movement = true;
+                }
+
+                if (!lane_has_supported_group_movement)
+                {
+                    return false;
+                }
+            }
+
+            for (size_t i = 0; i < group_movements.size(); ++i)
+            {
+                for (size_t j = i + 1; j < group_movements.size(); ++j)
+                {
+                    if (hasMovementConflict(group_movements[i].from, group_movements[i].movement,
+                                            group_movements[j].from, group_movements[j].movement))
+                    {
+                        return false;
+                    }
                 }
             }
         }
@@ -178,6 +244,23 @@ namespace crossroads
             return false;
         }
 
+        auto find_lane_for_id = [&](LaneId lane_id, ApproachId &approach, const LaneConfig *&lane_cfg)
+        {
+            for (const auto &entry : intersection_config.approaches)
+            {
+                auto found = std::find_if(entry.lanes.begin(), entry.lanes.end(),
+                                          [lane_id](const LaneConfig &lane)
+                                          { return lane.id == lane_id; });
+                if (found != entry.lanes.end())
+                {
+                    approach = entry.id;
+                    lane_cfg = &(*found);
+                    return true;
+                }
+            }
+            return false;
+        };
+
         struct MovementRef
         {
             ApproachId from;
@@ -199,14 +282,30 @@ namespace crossroads
             for (LaneId lane_id : group_it->controlled_lanes)
             {
                 ApproachId approach;
-                if (!tryFindApproachForLane(lane_id, approach))
+                const LaneConfig *lane_cfg = nullptr;
+                if (!find_lane_for_id(lane_id, approach, lane_cfg) || lane_cfg == nullptr)
                 {
                     return false;
                 }
 
+                bool lane_has_supported_group_movement = false;
                 for (MovementType movement : group_it->green_movements)
                 {
+                    const bool lane_supports_movement = std::find(lane_cfg->allowed_movements.begin(),
+                                                                  lane_cfg->allowed_movements.end(),
+                                                                  movement) != lane_cfg->allowed_movements.end();
+                    if (!lane_supports_movement)
+                    {
+                        continue;
+                    }
+
                     active_movements.push_back({approach, movement});
+                    lane_has_supported_group_movement = true;
+                }
+
+                if (!lane_has_supported_group_movement)
+                {
+                    return false;
                 }
             }
         }
@@ -243,30 +342,83 @@ namespace crossroads
         auto is_active = [](LightState s)
         { return s == LightState::Green || s == LightState::Orange; };
 
+        auto turning_pair_conflicts = [&](ApproachId from_a, MovementType move_a,
+                                          ApproachId from_b, MovementType move_b)
+        {
+            auto collect_target_lanes = [&](ApproachId from, MovementType movement)
+            {
+                std::vector<LaneId> targets;
+                for (const auto &connection : intersection_config.lane_connections)
+                {
+                    if (connection.from_approach != from || connection.movement != movement)
+                    {
+                        continue;
+                    }
+                    targets.push_back(laneIdFor(connection.to_approach,
+                                                static_cast<std::size_t>(connection.to_lane_index)));
+                }
+                std::sort(targets.begin(), targets.end());
+                targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+                return targets;
+            };
+
+            const auto a_targets = collect_target_lanes(from_a, move_a);
+            const auto b_targets = collect_target_lanes(from_b, move_b);
+            if (!a_targets.empty() && !b_targets.empty())
+            {
+                for (LaneId lane_id : a_targets)
+                {
+                    if (std::find(b_targets.begin(), b_targets.end(), lane_id) != b_targets.end())
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            return hasMovementConflict(from_a, move_a, from_b, move_b);
+        };
+
         // turnSouthEast cannot be green if West is active
-        if (state.turnSouthEast == LightState::Green && is_active(state.west))
+        if (state.turnSouthEast == LightState::Green && is_active(state.west) &&
+            turning_pair_conflicts(ApproachId::South, MovementType::Right,
+                                   ApproachId::West, MovementType::Straight))
             return false;
 
         // turnNorthWest cannot be green if East is active
-        if (state.turnNorthWest == LightState::Green && is_active(state.east))
+        if (state.turnNorthWest == LightState::Green && is_active(state.east) &&
+            turning_pair_conflicts(ApproachId::North, MovementType::Right,
+                                   ApproachId::East, MovementType::Straight))
             return false;
 
         // turnWestSouth cannot be green if North is active
-        if (state.turnWestSouth == LightState::Green && is_active(state.north))
+        if (state.turnWestSouth == LightState::Green && is_active(state.north) &&
+            turning_pair_conflicts(ApproachId::West, MovementType::Right,
+                                   ApproachId::North, MovementType::Straight))
             return false;
 
         // turnEastNorth cannot be green if South is active
-        if (state.turnEastNorth == LightState::Green && is_active(state.south))
+        if (state.turnEastNorth == LightState::Green && is_active(state.south) &&
+            turning_pair_conflicts(ApproachId::East, MovementType::Right,
+                                   ApproachId::South, MovementType::Straight))
             return false;
 
         // Dedicated left-turns cannot be green if opposing main corridor is active
-        if (state.turnNorthEast == LightState::Green && is_active(state.south))
+        if (state.turnNorthEast == LightState::Green && is_active(state.south) &&
+            hasMovementConflict(ApproachId::North, MovementType::Left,
+                                ApproachId::South, MovementType::Straight))
             return false;
-        if (state.turnSouthWest == LightState::Green && is_active(state.north))
+        if (state.turnSouthWest == LightState::Green && is_active(state.north) &&
+            hasMovementConflict(ApproachId::South, MovementType::Left,
+                                ApproachId::North, MovementType::Straight))
             return false;
-        if (state.turnEastSouth == LightState::Green && is_active(state.west))
+        if (state.turnEastSouth == LightState::Green && is_active(state.west) &&
+            hasMovementConflict(ApproachId::East, MovementType::Left,
+                                ApproachId::West, MovementType::Straight))
             return false;
-        if (state.turnWestNorth == LightState::Green && is_active(state.east))
+        if (state.turnWestNorth == LightState::Green && is_active(state.east) &&
+            hasMovementConflict(ApproachId::West, MovementType::Left,
+                                ApproachId::East, MovementType::Straight))
             return false;
 
         return true;
@@ -360,30 +512,83 @@ namespace crossroads
         auto is_active = [](LightState s)
         { return s == LightState::Green || s == LightState::Orange; };
 
+        auto turning_pair_conflicts = [&](ApproachId from_a, MovementType move_a,
+                                          ApproachId from_b, MovementType move_b)
+        {
+            auto collect_target_lanes = [&](ApproachId from, MovementType movement)
+            {
+                std::vector<LaneId> targets;
+                for (const auto &connection : intersection_config.lane_connections)
+                {
+                    if (connection.from_approach != from || connection.movement != movement)
+                    {
+                        continue;
+                    }
+                    targets.push_back(laneIdFor(connection.to_approach,
+                                                static_cast<std::size_t>(connection.to_lane_index)));
+                }
+                std::sort(targets.begin(), targets.end());
+                targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+                return targets;
+            };
+
+            const auto a_targets = collect_target_lanes(from_a, move_a);
+            const auto b_targets = collect_target_lanes(from_b, move_b);
+            if (!a_targets.empty() && !b_targets.empty())
+            {
+                for (LaneId lane_id : a_targets)
+                {
+                    if (std::find(b_targets.begin(), b_targets.end(), lane_id) != b_targets.end())
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            return hasMovementConflict(from_a, move_a, from_b, move_b);
+        };
+
         // turnSouthEast cannot go green if West is active
-        if (next.turnSouthEast == LightState::Green && is_active(next.west))
+        if (next.turnSouthEast == LightState::Green && is_active(next.west) &&
+            turning_pair_conflicts(ApproachId::South, MovementType::Right,
+                                   ApproachId::West, MovementType::Straight))
             return false;
 
         // turnNorthWest cannot go green if East is active
-        if (next.turnNorthWest == LightState::Green && is_active(next.east))
+        if (next.turnNorthWest == LightState::Green && is_active(next.east) &&
+            turning_pair_conflicts(ApproachId::North, MovementType::Right,
+                                   ApproachId::East, MovementType::Straight))
             return false;
 
         // turnWestSouth cannot go green if North is active
-        if (next.turnWestSouth == LightState::Green && is_active(next.north))
+        if (next.turnWestSouth == LightState::Green && is_active(next.north) &&
+            turning_pair_conflicts(ApproachId::West, MovementType::Right,
+                                   ApproachId::North, MovementType::Straight))
             return false;
 
         // turnEastNorth cannot go green if South is active
-        if (next.turnEastNorth == LightState::Green && is_active(next.south))
+        if (next.turnEastNorth == LightState::Green && is_active(next.south) &&
+            turning_pair_conflicts(ApproachId::East, MovementType::Right,
+                                   ApproachId::South, MovementType::Straight))
             return false;
 
         // Dedicated left-turns cannot go green while opposing main is active
-        if (next.turnNorthEast == LightState::Green && is_active(next.south))
+        if (next.turnNorthEast == LightState::Green && is_active(next.south) &&
+            hasMovementConflict(ApproachId::North, MovementType::Left,
+                                ApproachId::South, MovementType::Straight))
             return false;
-        if (next.turnSouthWest == LightState::Green && is_active(next.north))
+        if (next.turnSouthWest == LightState::Green && is_active(next.north) &&
+            hasMovementConflict(ApproachId::South, MovementType::Left,
+                                ApproachId::North, MovementType::Straight))
             return false;
-        if (next.turnEastSouth == LightState::Green && is_active(next.west))
+        if (next.turnEastSouth == LightState::Green && is_active(next.west) &&
+            hasMovementConflict(ApproachId::East, MovementType::Left,
+                                ApproachId::West, MovementType::Straight))
             return false;
-        if (next.turnWestNorth == LightState::Green && is_active(next.east))
+        if (next.turnWestNorth == LightState::Green && is_active(next.east) &&
+            hasMovementConflict(ApproachId::West, MovementType::Left,
+                                ApproachId::East, MovementType::Straight))
             return false;
 
         return true;

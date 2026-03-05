@@ -27,6 +27,17 @@ Uitwisseling verloopt via JSON, maar validatie gebeurt op domeinniveau (semantie
 - `allowed_movements` is niet leeg voor verbonden lanes.
 - `has_traffic_light` kan alleen waar zijn als `connected_to_intersection` waar is.
 
+## Uitbreiding domeincontract (simulatieplanning)
+- Route-identiteit wordt bepaald door `from_lane + movement`.
+- Conflictrelaties tussen routes worden afgeleid naar een conflictmatrix voor runtime-sturing.
+- Conflictmatrix-semantiek: als één lane in een routefamilie conflicteert, wordt de volledige conflicterende routefamilie als blocker behandeld.
+- Niet-conflicterende routes blijven onafhankelijk bestuurbaar (worden niet impliciet mee aangepast).
+
+## Timing/fairness parameters (domeinniveau)
+- `minimum_green_seconds`: minimale groenduur na activatie.
+- `wmax_seconds`: maximale toegestane wachttijd bij aanhoudende vraag (bounded-wait fairness).
+- `max_green_seconds` als fallback-limiet bij conflicterende wachtende routes (default `8s`); zonder conflict blijft regeling adaptief op doorstroming.
+
 ## Alternatieven
 - Ad-hoc JSON direct in simulator (afgewezen: te foutgevoelig).
 - DB-schema als enige waarheid (afgewezen: lekt persistence-details in domeinlogica).

@@ -1,20 +1,27 @@
 <!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Crossroads Config</title>
-        <link rel="stylesheet" href="/assets/config.css" />
+    <link rel="stylesheet" href="/assets/config.css" />
 
 </head>
+
 <body>
     <div class="wrap">
         <h1>Intersection Config</h1>
         <div class="row">
-            <button id="btnLoad" onclick="loadConfig()">Load</button>
-            <button id="btnSave" onclick="saveConfig()">Save (pending)</button>
-            <button id="btnApply" class="secondary" onclick="applyConfig()">Apply via reset</button>
-            <button id="btnStart" class="secondary" onclick="startSim()">Start</button>
+            <button id="btnLoad" onclick="loadConfig()">Reload</button>
+            <button id="btnSave" onclick="saveConfig()">Save (current)</button>
+            <input id="namedConfigName" type="text" placeholder="Config name" />
+            <button id="btnLoadNamed" onclick="loadNamedConfig()">Select config</button>
+            <button id="btnSaveNamed" class="secondary" onclick="saveNamedConfig()">Save as</button>
+            <button id="btnDeleteNamed" onclick="deleteNamedConfig()">Delete...</button>
+            <button id="btnCopyNamed" onclick="copyNamedConfig()">Copy...</button>
+            <button id="btnApply" class="secondary" onclick="applyConfig()"
+                title="Reset the simulator with the current loaded configuration">Activate</button>
             <a href="/">Back to simulator</a>
             <span id="runState" class="small">sim state: unknown</span>
         </div>
@@ -27,12 +34,32 @@
             </div>
             <div class="route-wrap">
                 <div class="graph-title">Configured routes through intersection</div>
-                <svg id="routeMap" class="route-map" viewBox="0 0 640 360" role="img" aria-label="Configured route schematic"></svg>
+                <svg id="routeMap" class="route-map" viewBox="0 0 640 360" role="img"
+                    aria-label="Configured route schematic"></svg>
             </div>
             <div id="approaches" class="grid"></div>
             <div id="status" class="status">Ready</div>
             <div id="banner" class="banner"></div>
             <ul id="errors" class="errors"></ul>
+        </div>
+    </div>
+
+    <div id="namedConfigModal" class="modal-backdrop hidden" role="dialog" aria-modal="true"
+        aria-labelledby="namedConfigModalTitle">
+        <div class="modal-panel">
+            <div class="modal-head">
+                <h2 id="namedConfigModalTitle">Saved configurations</h2>
+                <button id="namedConfigModalClose" class="secondary" type="button">Close</button>
+            </div>
+            <div class="modal-body">
+                <input id="namedConfigModalSearch" type="text" placeholder="Search saved config" />
+                <div id="namedConfigModalHint" class="small"></div>
+                <div id="namedConfigModalList" class="saved-list"></div>
+            </div>
+            <div class="modal-actions">
+                <button id="namedConfigModalCancel" class="secondary" type="button">Cancel</button>
+                <button id="namedConfigModalAction" type="button">Select</button>
+            </div>
         </div>
     </div>
 
@@ -49,8 +76,64 @@
         const runStateEl = document.getElementById('runState');
         const btnLoadEl = document.getElementById('btnLoad');
         const btnSaveEl = document.getElementById('btnSave');
+        const namedConfigNameEl = document.getElementById('namedConfigName');
+        const btnLoadNamedEl = document.getElementById('btnLoadNamed');
+        const btnSaveNamedEl = document.getElementById('btnSaveNamed');
+        const btnDeleteNamedEl = document.getElementById('btnDeleteNamed');
+        const btnCopyNamedEl = document.getElementById('btnCopyNamed');
         const btnApplyEl = document.getElementById('btnApply');
-        const btnStartEl = document.getElementById('btnStart');
+        const namedConfigModalEl = document.getElementById('namedConfigModal');
+        const namedConfigModalTitleEl = document.getElementById('namedConfigModalTitle');
+        const namedConfigModalCloseEl = document.getElementById('namedConfigModalClose');
+        const namedConfigModalSearchEl = document.getElementById('namedConfigModalSearch');
+        const namedConfigModalHintEl = document.getElementById('namedConfigModalHint');
+        const namedConfigModalListEl = document.getElementById('namedConfigModalList');
+        const namedConfigModalCancelEl = document.getElementById('namedConfigModalCancel');
+        const namedConfigModalActionEl = document.getElementById('namedConfigModalAction');
+        let lastLoadedNamedConfigName = '';
+        let namedModalResolver = null;
+        let namedModalIntent = 'load';
+        let namedModalItems = [];
+        let namedModalFilteredItems = [];
+        let namedModalSelectedName = '';
+        let pendingDeleteNamedName = '';
+        let lastSavedCurrentConfigJson = '';
+        let isSimulatorRunning = false;
+
+        function defaultConfigName() {
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const dd = String(now.getDate()).padStart(2, '0');
+            const hh = String(now.getHours()).padStart(2, '0');
+            const min = String(now.getMinutes()).padStart(2, '0');
+            return `Configuratie ${yyyy}-${mm}-${dd} ${hh}:${min}`;
+        }
+
+        function resolvedNameInput() {
+            const typed = String(namedConfigNameEl.value || '').trim();
+            if (typed) {
+                return typed;
+            }
+            if (lastLoadedNamedConfigName) {
+                namedConfigNameEl.value = lastLoadedNamedConfigName;
+                return lastLoadedNamedConfigName;
+            }
+            const fallback = defaultConfigName();
+            namedConfigNameEl.value = fallback;
+            return fallback;
+        }
+
+        async function postConfigAction(payload) {
+            const res = await fetch('/config/api', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const txt = await res.text();
+            const parsed = tryParseResponseBody(txt);
+            return { ok: res.ok, status: res.status, text: txt, body: parsed };
+        }
 
         let state = {
             approaches: [],
@@ -258,6 +341,53 @@
             statusEl.className = 'status ' + (kind || '');
         }
 
+        function currentConfigJson() {
+            try {
+                return JSON.stringify(collectOutgoingPayload());
+            } catch {
+                return '';
+            }
+        }
+
+        function hasCurrentConfigChanges() {
+            const current = currentConfigJson();
+            if (!current) {
+                return false;
+            }
+            return current !== lastSavedCurrentConfigJson;
+        }
+
+        function refreshPrimaryActionButtons() {
+            const dirty = hasCurrentConfigChanges();
+
+            btnSaveEl.disabled = !dirty;
+            if (dirty) {
+                btnSaveEl.classList.remove('secondary');
+                btnSaveEl.title = 'Save changed configuration as current pending config';
+            } else {
+                btnSaveEl.classList.add('secondary');
+                btnSaveEl.title = 'No changes to save';
+            }
+
+            btnApplyEl.disabled = isSimulatorRunning ? true : !dirty;
+            if (!btnApplyEl.disabled) {
+                btnApplyEl.classList.remove('secondary');
+            } else {
+                btnApplyEl.classList.add('secondary');
+            }
+        }
+
+        function updateNamedSaveButtonVisualState() {
+            const hasName = String(namedConfigNameEl.value || '').trim().length > 0;
+            if (hasName) {
+                btnSaveNamedEl.classList.remove('secondary');
+                btnSaveNamedEl.title = 'Save this config under the entered name';
+            } else {
+                btnSaveNamedEl.classList.add('secondary');
+                btnSaveNamedEl.title = 'No name entered: a default name will be proposed';
+            }
+        }
+
         function tryParseResponseBody(text) {
             try {
                 return JSON.parse(text);
@@ -335,6 +465,7 @@
             };
 
             normalizeConnections();
+            lastSavedCurrentConfigJson = currentConfigJson();
         }
 
         function collectOutgoingPayload() {
@@ -421,6 +552,441 @@
             return errors;
         }
 
+        async function listNamedConfigs() {
+            const result = await postConfigAction({ action: 'list_named' });
+            if (!result.ok) {
+                const errs = result.body && Array.isArray(result.body.errors) ? result.body.errors : [result.text || 'Failed to load saved configurations'];
+                throw new Error(errs.join('; '));
+            }
+            if (!result.body || !Array.isArray(result.body.items)) {
+                return [];
+            }
+            return result.body.items;
+        }
+
+        async function prefillNameFromMostRecent() {
+            try {
+                const result = await postConfigAction({ action: 'last_used_name' });
+                if (!result.ok) {
+                    updateNamedSaveButtonVisualState();
+                    return;
+                }
+                const name = result.body && typeof result.body.name === 'string' ? result.body.name.trim() : '';
+                if (!name) {
+                    updateNamedSaveButtonVisualState();
+                    return;
+                }
+                lastLoadedNamedConfigName = name;
+                if (!String(namedConfigNameEl.value || '').trim()) {
+                    namedConfigNameEl.value = name;
+                }
+                updateNamedSaveButtonVisualState();
+            } catch {
+                updateNamedSaveButtonVisualState();
+            }
+        }
+
+        function closeNamedConfigModal(selectedItem) {
+            namedConfigModalEl.classList.add('hidden');
+            const resolver = namedModalResolver;
+            namedModalResolver = null;
+            namedModalItems = [];
+            namedModalFilteredItems = [];
+            namedModalSelectedName = '';
+            pendingDeleteNamedName = '';
+            namedConfigModalSearchEl.value = '';
+            namedConfigModalListEl.innerHTML = '';
+            if (resolver) {
+                resolver(selectedItem || null);
+            }
+        }
+
+        function modalMetaText(item) {
+            const updated = String(item.updated_at || '').trim();
+            return updated ? `Last updated: ${updated}` : 'Saved config';
+        }
+
+        function renderNamedConfigModalList() {
+            namedConfigModalListEl.innerHTML = '';
+            if (namedModalFilteredItems.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'saved-item-empty';
+                empty.textContent = 'No saved config matches your search.';
+                namedConfigModalListEl.appendChild(empty);
+                namedConfigModalActionEl.disabled = true;
+                return;
+            }
+
+            namedConfigModalActionEl.disabled = false;
+            for (const item of namedModalFilteredItems) {
+                if (namedModalIntent === 'delete') {
+                    const row = document.createElement('div');
+                    row.className = 'saved-item-row';
+                    const isDefaultConfig = String(item.name || '').toLowerCase() === 'standaard';
+
+                    const actions = document.createElement('div');
+                    actions.className = 'saved-item-actions';
+
+                    const trash = document.createElement('button');
+                    trash.type = 'button';
+                    trash.className = 'saved-item-icon saved-item-trash';
+                    trash.title = isDefaultConfig ? `'${item.name}' cannot be deleted` : `Delete '${item.name}'`;
+                    trash.textContent = isDefaultConfig ? '🔒' : '🗑';
+                    trash.disabled = isDefaultConfig;
+                    if (isDefaultConfig) {
+                        trash.classList.add('saved-item-disabled');
+                    }
+                    trash.onclick = async (ev) => {
+                        ev.stopPropagation();
+                        if (isDefaultConfig) {
+                            return;
+                        }
+                        if (pendingDeleteNamedName === item.name) {
+                            await deleteNamedByName(item.name);
+                            return;
+                        }
+                        pendingDeleteNamedName = item.name;
+                        renderNamedConfigModalList();
+                    };
+                    actions.appendChild(trash);
+
+                    row.appendChild(actions);
+
+                    const entry = document.createElement('button');
+                    entry.type = 'button';
+                    entry.className = 'saved-item saved-item-main' + (item.name === namedModalSelectedName ? ' selected' : '');
+                    entry.onclick = () => {
+                        namedModalSelectedName = item.name;
+                        renderNamedConfigModalList();
+                    };
+
+                    const top = document.createElement('div');
+                    top.className = 'saved-item-name';
+                    top.textContent = item.name;
+
+                    const meta = document.createElement('div');
+                    meta.className = 'saved-item-meta';
+                    meta.textContent = modalMetaText(item);
+
+                    if (isDefaultConfig) {
+                        const lockNote = document.createElement('div');
+                        lockNote.className = 'saved-item-locked';
+                        lockNote.textContent = 'Default config (not deletable)';
+                        entry.appendChild(top);
+                        entry.appendChild(meta);
+                        entry.appendChild(lockNote);
+                    } else if (pendingDeleteNamedName === item.name) {
+                        const confirmDelete = document.createElement('div');
+                        confirmDelete.className = 'saved-item-confirm';
+                        confirmDelete.textContent = 'Click 🗑 again to confirm delete';
+                        entry.appendChild(top);
+                        entry.appendChild(meta);
+                        entry.appendChild(confirmDelete);
+                    } else {
+                        entry.appendChild(top);
+                        entry.appendChild(meta);
+                    }
+
+                    row.appendChild(entry);
+                    namedConfigModalListEl.appendChild(row);
+                    continue;
+                }
+
+                const row = document.createElement('div');
+                row.className = 'saved-item-row';
+
+                const spacer = document.createElement('div');
+                spacer.className = 'saved-item-spacer';
+                row.appendChild(spacer);
+
+                const entry = document.createElement('button');
+                entry.type = 'button';
+                entry.className = 'saved-item saved-item-main' + (item.name === namedModalSelectedName ? ' selected' : '');
+                entry.onclick = () => {
+                    namedModalSelectedName = item.name;
+                    pendingDeleteNamedName = '';
+                    renderNamedConfigModalList();
+                };
+
+                const top = document.createElement('div');
+                top.className = 'saved-item-name';
+                top.textContent = item.name;
+
+                const meta = document.createElement('div');
+                meta.className = 'saved-item-meta';
+                meta.textContent = modalMetaText(item);
+
+                entry.appendChild(top);
+                entry.appendChild(meta);
+                row.appendChild(entry);
+                namedConfigModalListEl.appendChild(row);
+            }
+        }
+
+        function applyNamedConfigFilter() {
+            const needle = String(namedConfigModalSearchEl.value || '').trim().toLowerCase();
+            namedModalFilteredItems = needle
+                ? namedModalItems.filter((item) => String(item.name || '').toLowerCase().includes(needle))
+                : namedModalItems.slice();
+
+            if (!namedModalFilteredItems.find((item) => item.name === namedModalSelectedName)) {
+                namedModalSelectedName = namedModalFilteredItems.length > 0 ? namedModalFilteredItems[0].name : '';
+            }
+            renderNamedConfigModalList();
+        }
+
+        function openNamedConfigModal(items, intent) {
+            namedModalIntent = intent;
+            namedModalItems = Array.isArray(items) ? items.slice() : [];
+            namedModalFilteredItems = namedModalItems.slice();
+            namedModalSelectedName = namedModalFilteredItems.length > 0 ? namedModalFilteredItems[0].name : '';
+            pendingDeleteNamedName = '';
+
+            const isDelete = intent === 'delete';
+            const isCopy = intent === 'copy';
+            namedConfigModalTitleEl.textContent = isDelete
+                ? 'Delete saved configuration'
+                : isCopy
+                    ? 'Copy configuration'
+                    : 'Select configuration';
+            namedConfigModalHintEl.textContent = isDelete
+                ? 'Use 🗑 to remove a configuration.'
+                : isCopy
+                    ? 'Choose one saved configuration to copy.'
+                    : 'Choose one saved configuration to use.';
+            namedConfigModalActionEl.textContent = isCopy ? 'Copy selected' : 'Select';
+            namedConfigModalActionEl.className = isDelete ? 'danger' : '';
+            namedConfigModalActionEl.style.display = isDelete ? 'none' : '';
+            namedConfigModalActionEl.disabled = namedModalFilteredItems.length === 0;
+
+            namedConfigModalEl.classList.remove('hidden');
+            renderNamedConfigModalList();
+            namedConfigModalSearchEl.focus();
+
+            return new Promise((resolve) => {
+                namedModalResolver = resolve;
+            });
+        }
+
+        async function saveNamedConfig() {
+            const errors = validateConfig();
+            if (errors.length > 0) {
+                setErrors(errors);
+                setBanner('Validation failed', 'err');
+                setStatus('Fix validation errors before saving', 'err');
+                return;
+            }
+
+            const outgoing = collectOutgoingPayload();
+            const name = resolvedNameInput();
+            setStatus(`Saving '${name}'...`, 'warn');
+            setBanner(`Saving '${name}'...`, 'warn');
+
+            try {
+                btnSaveNamedEl.disabled = true;
+                const existing = await listNamedConfigs();
+                const duplicate = existing.find((entry) => String(entry.name || '').toLowerCase() === name.toLowerCase());
+                if (duplicate) {
+                    const overwrite = confirm(`Config '${name}' already exists. Overwrite it?`);
+                    if (!overwrite) {
+                        setStatus('Save cancelled', 'warn');
+                        return;
+                    }
+                }
+
+                const result = await postConfigAction({ action: 'save_named', name, config: outgoing });
+                if (!result.ok) {
+                    const errs = result.body && Array.isArray(result.body.errors) ? result.body.errors : [result.text || 'Failed to save named config'];
+                    setErrors(errs);
+                    setBanner('Save as failed', 'err');
+                    setStatus(errs.join('; '), 'err');
+                    return;
+                }
+
+                lastLoadedNamedConfigName = name;
+                namedConfigNameEl.value = name;
+                updateNamedSaveButtonVisualState();
+                clearErrors();
+                setBanner(`Saved '${name}'`, 'ok');
+                setStatus('Saved named configuration', 'ok');
+            } catch (e) {
+                clearErrors();
+                setBanner('Save as request failed', 'err');
+                setStatus(`Save as error: ${String(e)}`, 'err');
+            } finally {
+                btnSaveNamedEl.disabled = false;
+            }
+        }
+
+        async function loadNamedConfig() {
+            try {
+                btnLoadNamedEl.disabled = true;
+                setStatus('Loading saved configurations...', 'warn');
+                setBanner('Loading saved configurations...', 'warn');
+                const items = await listNamedConfigs();
+                if (items.length === 0) {
+                    clearErrors();
+                    setBanner('No saved configs found', 'warn');
+                    setStatus('No saved configurations available', 'warn');
+                    return;
+                }
+
+                const picked = await openNamedConfigModal(items, 'load');
+                if (!picked) {
+                    return;
+                }
+
+                const result = await postConfigAction({ action: 'load_named', name: picked.name });
+                if (!result.ok || !result.body || !result.body.config) {
+                    const errs = result.body && Array.isArray(result.body.errors) ? result.body.errors : [result.text || 'Failed to load named config'];
+                    setErrors(errs);
+                    setBanner('Load saved failed', 'err');
+                    setStatus(errs.join('; '), 'err');
+                    return;
+                }
+
+                hydrateStateFromConfig(result.body.config);
+                renderEditor();
+                clearErrors();
+                lastLoadedNamedConfigName = picked.name;
+                namedConfigNameEl.value = picked.name;
+                updateNamedSaveButtonVisualState();
+                setBanner(`Loaded '${picked.name}'`, 'ok');
+                setStatus('Saved configuration loaded', 'ok');
+                await refreshRunState();
+            } catch (e) {
+                clearErrors();
+                setBanner('Load saved request failed', 'err');
+                setStatus(`Load saved error: ${String(e)}`, 'err');
+            } finally {
+                btnLoadNamedEl.disabled = false;
+            }
+        }
+
+        async function deleteNamedConfig() {
+            try {
+                btnDeleteNamedEl.disabled = true;
+                setStatus('Loading saved configurations...', 'warn');
+                setBanner('Loading saved configurations...', 'warn');
+                const items = await listNamedConfigs();
+                if (items.length === 0) {
+                    clearErrors();
+                    setBanner('No saved configs found', 'warn');
+                    setStatus('No saved configurations available', 'warn');
+                    return;
+                }
+
+                await openNamedConfigModal(items, 'delete');
+            } catch (e) {
+                clearErrors();
+                setBanner('Delete request failed', 'err');
+                setStatus(`Delete error: ${String(e)}`, 'err');
+            } finally {
+                btnDeleteNamedEl.disabled = false;
+            }
+        }
+
+        async function copyNamedConfig() {
+            try {
+                btnCopyNamedEl.disabled = true;
+                setStatus('Loading saved configurations...', 'warn');
+                setBanner('Loading saved configurations...', 'warn');
+                const items = await listNamedConfigs();
+                if (items.length === 0) {
+                    clearErrors();
+                    setBanner('No saved configs found', 'warn');
+                    setStatus('No saved configurations available', 'warn');
+                    return;
+                }
+
+                const picked = await openNamedConfigModal(items, 'copy');
+                if (!picked) {
+                    return;
+                }
+
+                await copyNamedByName(picked.name);
+            } catch (e) {
+                clearErrors();
+                setBanner('Copy request failed', 'err');
+                setStatus(`Copy error: ${String(e)}`, 'err');
+            } finally {
+                btnCopyNamedEl.disabled = false;
+            }
+        }
+
+        async function deleteNamedByName(name) {
+            const result = await postConfigAction({ action: 'delete_named', name });
+            if (!result.ok) {
+                const errs = result.body && Array.isArray(result.body.errors) ? result.body.errors : [result.text || 'Failed to delete named config'];
+                setErrors(errs);
+                setBanner('Delete failed', 'err');
+                setStatus(errs.join('; '), 'err');
+                return;
+            }
+
+            if (namedConfigNameEl.value === name) {
+                namedConfigNameEl.value = '';
+            }
+            pendingDeleteNamedName = '';
+            namedModalItems = namedModalItems.filter((item) => item.name !== name);
+            applyNamedConfigFilter();
+            updateNamedSaveButtonVisualState();
+            clearErrors();
+            setBanner(`Deleted '${name}'`, 'ok');
+            setStatus('Saved configuration deleted', 'ok');
+        }
+
+        async function copyNamedByName(sourceName) {
+            const copyNameRaw = prompt(`Copy '${sourceName}' as:`, `${sourceName} Copy`);
+            if (copyNameRaw === null) {
+                setStatus('Copy cancelled', 'warn');
+                return;
+            }
+
+            const targetName = String(copyNameRaw || '').trim();
+            if (!targetName) {
+                setStatus('Copy name is required', 'err');
+                setBanner('Copy failed', 'err');
+                return;
+            }
+
+            const existing = namedModalItems.find((item) => String(item.name || '').toLowerCase() === targetName.toLowerCase());
+            if (existing) {
+                const overwrite = confirm(`Config '${targetName}' already exists. Overwrite it?`);
+                if (!overwrite) {
+                    setStatus('Copy cancelled', 'warn');
+                    return;
+                }
+            }
+
+            const loaded = await postConfigAction({ action: 'load_named', name: sourceName });
+            if (!loaded.ok || !loaded.body || !loaded.body.config) {
+                const errs = loaded.body && Array.isArray(loaded.body.errors) ? loaded.body.errors : [loaded.text || 'Failed to load source config'];
+                setErrors(errs);
+                setBanner('Copy failed', 'err');
+                setStatus(errs.join('; '), 'err');
+                return;
+            }
+
+            const saved = await postConfigAction({ action: 'save_named', name: targetName, config: loaded.body.config });
+            if (!saved.ok) {
+                const errs = saved.body && Array.isArray(saved.body.errors) ? saved.body.errors : [saved.text || 'Failed to save copied config'];
+                setErrors(errs);
+                setBanner('Copy failed', 'err');
+                setStatus(errs.join('; '), 'err');
+                return;
+            }
+
+            try {
+                namedModalItems = await listNamedConfigs();
+                applyNamedConfigFilter();
+            } catch {
+            }
+
+            setBanner(`Copied '${sourceName}' to '${targetName}'`, 'ok');
+            setStatus('Configuration copied', 'ok');
+        }
+
         async function refreshRunState() {
             try {
                 const res = await fetch('/snapshot');
@@ -429,11 +995,13 @@
                 }
                 const snapshot = await res.json();
                 const running = !!snapshot.running;
+                isSimulatorRunning = running;
                 runStateEl.textContent = `sim state: ${running ? 'running' : 'stopped'}`;
-                btnStartEl.disabled = running;
-                btnApplyEl.disabled = running;
+                refreshPrimaryActionButtons();
             } catch {
+                isSimulatorRunning = false;
                 runStateEl.textContent = 'sim state: unavailable';
+                refreshPrimaryActionButtons();
             }
         }
 
@@ -1125,11 +1693,14 @@
             }
 
             renderGraph();
+            refreshPrimaryActionButtons();
         }
 
         async function loadConfig() {
             try {
                 btnLoadEl.disabled = true;
+                setStatus('Loading active configuration...', 'warn');
+                setBanner('Loading active configuration...', 'warn');
                 const res = await fetch('/config/api');
                 const txt = await res.text();
                 if (!res.ok) {
@@ -1170,7 +1741,8 @@
                 setErrors(errors);
                 setBanner('Validation failed', 'err');
                 setStatus('Fix validation errors before saving', 'err');
-                return;
+                refreshPrimaryActionButtons();
+                return false;
             }
 
             const outgoing = collectOutgoingPayload();
@@ -1178,6 +1750,8 @@
 
             try {
                 btnSaveEl.disabled = true;
+                setStatus('Saving pending configuration...', 'warn');
+                setBanner('Saving pending configuration...', 'warn');
                 const res = await fetch('/config/api', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1190,22 +1764,35 @@
                     setBanner('Save rejected by server', 'err');
                     setErrors(errs.length > 0 ? errs : [txt]);
                     setStatus(`Save failed: ${txt}`, 'err');
-                    return;
+                    refreshPrimaryActionButtons();
+                    return false;
                 }
+                lastSavedCurrentConfigJson = normalized;
                 clearErrors();
-                setBanner('Config saved as pending (apply on start/reset)', 'ok');
-                setStatus('Config saved as pending (apply on start/reset)', 'ok');
+                setBanner('Config saved as current pending configuration.', 'ok');
+                setStatus('Config saved as current pending configuration', 'ok');
+                refreshPrimaryActionButtons();
+                return true;
             } catch (e) {
                 clearErrors();
                 setBanner('Save request failed', 'err');
                 setStatus(`Save error: ${String(e)}`, 'err');
+                refreshPrimaryActionButtons();
+                return false;
             } finally {
-                btnSaveEl.disabled = false;
+                refreshPrimaryActionButtons();
             }
         }
 
         async function applyConfig() {
             try {
+                if (hasCurrentConfigChanges()) {
+                    const saved = await saveConfig();
+                    if (!saved) {
+                        return;
+                    }
+                }
+
                 btnApplyEl.disabled = true;
                 await fetch('/command?cmd=reset');
                 clearErrors();
@@ -1217,26 +1804,28 @@
                 setBanner('Apply request failed', 'err');
                 setStatus(`Apply error: ${String(e)}`, 'err');
             } finally {
-                btnApplyEl.disabled = false;
+                refreshPrimaryActionButtons();
             }
         }
 
-        async function startSim() {
-            try {
-                btnStartEl.disabled = true;
-                await fetch('/command?cmd=start');
-                clearErrors();
-                setBanner('Start command sent', 'ok');
-                setStatus('Start sent', 'ok');
-                await refreshRunState();
-            } catch (e) {
-                clearErrors();
-                setBanner('Start request failed', 'err');
-                setStatus(`Start error: ${String(e)}`, 'err');
-            } finally {
-                btnStartEl.disabled = false;
+        namedConfigModalCloseEl.onclick = () => closeNamedConfigModal(null);
+        namedConfigModalCancelEl.onclick = () => closeNamedConfigModal(null);
+        namedConfigModalSearchEl.oninput = () => applyNamedConfigFilter();
+        namedConfigModalActionEl.onclick = () => {
+            const picked = namedModalFilteredItems.find((item) => item.name === namedModalSelectedName) || null;
+            closeNamedConfigModal(picked);
+        };
+        namedConfigModalEl.onclick = (e) => {
+            if (e.target === namedConfigModalEl) {
+                closeNamedConfigModal(null);
             }
-        }
+        };
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !namedConfigModalEl.classList.contains('hidden')) {
+                closeNamedConfigModal(null);
+            }
+        });
+        namedConfigNameEl.addEventListener('input', updateNamedSaveButtonVisualState);
 
         hydrateStateFromConfig({
             approaches: [
@@ -1248,10 +1837,14 @@
             signal_groups: [],
             lane_connections: []
         });
+        lastSavedCurrentConfigJson = currentConfigJson();
         renderEditor();
         loadConfig();
+        prefillNameFromMostRecent();
+        updateNamedSaveButtonVisualState();
         refreshRunState();
         setInterval(refreshRunState, 1500);
     </script>
 </body>
+
 </html>

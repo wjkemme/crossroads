@@ -1,0 +1,89 @@
+# ------------------------------------------------------------
+# Clang-Format configuratie - Uitgebreid voorbeeld
+# Baseline: Google Coding Style
+# ------------------------------------------------------------
+
+BasedOnStyle: Google
+
+# -------- Algemene instellingen --------
+Language: Cpp                    # Zorgt dat C++ regels gelden
+Standard: c++20                  # Gebruik modern C++  
+IndentWidth: 4                   # Indentatie 4 spaties (Google gebruikt 2)
+TabWidth: 4
+UseTab: Never                    # Nooit tabs, altijd spaties
+ColumnLimit: 120                 # Maximale regelbreedte
+
+# -------- Functie & control flow formatting --------
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortCaseLabelsOnASingleLine: false
+
+# -------- Spaties en whitespace regels --------
+SpaceAfterCStyleCast: true
+SpaceBeforeParens: ControlStatements   # if (), while (), for ()
+SpaceBeforeRangeBasedForLoopColon: true
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpacesInAngles: false
+
+# -------- Pointer & reference stijl --------
+PointerAlignment: Left          # int* ptr  in plaats van  int *ptr
+ReferenceAlignment: Left
+
+# -------- C++ namespaces --------
+NamespaceIndentation: All       # namespace { ... } wordt ingesprongen
+FixNamespaceComments: true      # // namespace X commentaren toevoegen
+
+# -------- Includes & sorting --------
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<.*\.h>'
+    Priority: 1
+  - Regex: '^<'
+    Priority: 2
+  - Regex: '^".*\.h"'
+    Priority: 3
+  - Regex: '^"'
+    Priority: 4
+
+SortIncludes: true
+IncludeIsMainRegex: '.*'
+
+# -------- Braces & layout --------
+BreakBeforeBraces: Attach       # void f() {   (zelfde regel)
+BraceWrapping:
+  AfterCaseLabel: false
+  AfterClass: false
+  AfterControlStatement: false
+  AfterEnum: false
+  AfterFunction: false
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeElse: false
+
+# -------- Lambda's --------
+LambdaBodyIndentation: Signature  # Body uitlijnen met lambda-signature
+
+# -------- Lijnafsplitsing regels --------
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeComma
+
+# -------- Commentaar regels --------
+AlignTrailingComments: true
+ReflowComments: true            # Lange comments worden netjes herschikt
+
+# -------- Struct, class & initializer lists --------
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignEscapedNewlines: Left      # Escape-newlines links uitlijnen
+BinPackArguments: false          # Geen compacte argument packing
+BinPackParameters: false
+
+# -------- Macro's --------
+IndentPPDirectives: AfterHash
+
+# -------- Fallback --------
+DerivePointerAlignment: false

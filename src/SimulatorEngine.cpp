@@ -5,6 +5,7 @@
 #include <sstream>
 #include <iostream>
 #include <utility>
+#include <cmath>
 
 namespace crossroads
 {
@@ -330,6 +331,390 @@ namespace crossroads
             }
             return ApproachId::North;
         }
+
+        bool hasRedToOrangeTransition(const IntersectionState &prev, const IntersectionState &next)
+        {
+            auto is_invalid = [](LightState from, LightState to)
+            {
+                return from == LightState::Red && to == LightState::Orange;
+            };
+
+            return is_invalid(prev.north, next.north) ||
+                   is_invalid(prev.east, next.east) ||
+                   is_invalid(prev.south, next.south) ||
+                   is_invalid(prev.west, next.west) ||
+                   is_invalid(prev.turnSouthEast, next.turnSouthEast) ||
+                   is_invalid(prev.turnNorthWest, next.turnNorthWest) ||
+                   is_invalid(prev.turnWestSouth, next.turnWestSouth) ||
+                   is_invalid(prev.turnEastNorth, next.turnEastNorth) ||
+                   is_invalid(prev.turnNorthEast, next.turnNorthEast) ||
+                   is_invalid(prev.turnSouthWest, next.turnSouthWest) ||
+                   is_invalid(prev.turnEastSouth, next.turnEastSouth) ||
+                   is_invalid(prev.turnWestNorth, next.turnWestNorth);
+        }
+
+        constexpr std::size_t kRouteCount = 12;
+
+        std::size_t routeIndex(ApproachId approach, MovementType movement)
+        {
+            std::size_t approach_idx = approachIndex(approach);
+            std::size_t movement_idx = 0;
+            switch (movement)
+            {
+            case MovementType::Straight:
+                movement_idx = 0;
+                break;
+            case MovementType::Left:
+                movement_idx = 1;
+                break;
+            case MovementType::Right:
+                movement_idx = 2;
+                break;
+            }
+            return approach_idx * 3 + movement_idx;
+        }
+
+        bool areOpposingApproaches(ApproachId lhs, ApproachId rhs)
+        {
+            return (lhs == ApproachId::North && rhs == ApproachId::South) ||
+                   (lhs == ApproachId::South && rhs == ApproachId::North) ||
+                   (lhs == ApproachId::East && rhs == ApproachId::West) ||
+                   (lhs == ApproachId::West && rhs == ApproachId::East);
+        }
+
+        const char *routeName(ApproachId approach, MovementType movement)
+        {
+            switch (approach)
+            {
+            case ApproachId::North:
+                switch (movement)
+                {
+                case MovementType::Straight:
+                    return "N->S";
+                case MovementType::Left:
+                    return "N->E";
+                case MovementType::Right:
+                    return "N->W";
+                }
+                break;
+            case ApproachId::East:
+                switch (movement)
+                {
+                case MovementType::Straight:
+                    return "E->W";
+                case MovementType::Left:
+                    return "E->S";
+                case MovementType::Right:
+                    return "E->N";
+                }
+                break;
+            case ApproachId::South:
+                switch (movement)
+                {
+                case MovementType::Straight:
+                    return "S->N";
+                case MovementType::Left:
+                    return "S->W";
+                case MovementType::Right:
+                    return "S->E";
+                }
+                break;
+            case ApproachId::West:
+                switch (movement)
+                {
+                case MovementType::Straight:
+                    return "W->E";
+                case MovementType::Left:
+                    return "W->N";
+                case MovementType::Right:
+                    return "W->S";
+                }
+                break;
+            }
+            return "?";
+        }
+
+        void setRouteLight(IntersectionState &state, ApproachId approach, MovementType movement, LightState color)
+        {
+            switch (movement)
+            {
+            case MovementType::Straight:
+                setApproachMainLight(state, approach, color);
+                break;
+            case MovementType::Left:
+                setLeftTurnLight(state, approach, color);
+                break;
+            case MovementType::Right:
+                setRightTurnLight(state, approach, color);
+                break;
+            }
+        }
+
+        bool routeIsGreen(const IntersectionState &state, ApproachId approach, MovementType movement)
+        {
+            switch (movement)
+            {
+            case MovementType::Straight:
+                return approachMainLight(approach, state) == LightState::Green;
+            case MovementType::Left:
+                return leftTurnLightFor(directionFromApproach(approach), state) == LightState::Green;
+            case MovementType::Right:
+                return rightTurnLightFor(directionFromApproach(approach), state) == LightState::Green;
+            }
+            return false;
+        }
+
+        struct RoutePoint
+        {
+            double x = 0.0;
+            double y = 0.0;
+        };
+
+        double laneLateralOffset(ApproachId approach, std::size_t lane_index, std::size_t lane_count)
+        {
+            if (lane_count <= 1)
+            {
+                return 0.0;
+            }
+
+            const double step = 0.22;
+            const double half_span = (static_cast<double>(lane_count - 1) * step) * 0.5;
+            const double raw = -half_span + static_cast<double>(lane_index) * step;
+
+            switch (approach)
+            {
+            case ApproachId::North:
+                return -raw;
+            case ApproachId::South:
+                return raw;
+            case ApproachId::East:
+                return raw;
+            case ApproachId::West:
+                return -raw;
+            }
+            return raw;
+        }
+
+        RoutePoint entryPointFor(ApproachId approach, std::size_t lane_index, std::size_t lane_count)
+        {
+            const double lateral = laneLateralOffset(approach, lane_index, lane_count);
+            switch (approach)
+            {
+            case ApproachId::North:
+                return {lateral, 1.0};
+            case ApproachId::South:
+                return {lateral, -1.0};
+            case ApproachId::East:
+                return {1.0, lateral};
+            case ApproachId::West:
+                return {-1.0, lateral};
+            }
+            return {0.0, 0.0};
+        }
+
+        RoutePoint exitPointFor(ApproachId approach, std::size_t lane_index, std::size_t lane_count)
+        {
+            const double lateral = laneLateralOffset(approach, lane_index, lane_count);
+            switch (approach)
+            {
+            case ApproachId::North:
+                return {lateral, 1.0};
+            case ApproachId::South:
+                return {lateral, -1.0};
+            case ApproachId::East:
+                return {1.0, lateral};
+            case ApproachId::West:
+                return {-1.0, lateral};
+            }
+            return {0.0, 0.0};
+        }
+
+        RoutePoint inboundDirection(ApproachId approach)
+        {
+            switch (approach)
+            {
+            case ApproachId::North:
+                return {0.0, -1.0};
+            case ApproachId::South:
+                return {0.0, 1.0};
+            case ApproachId::East:
+                return {-1.0, 0.0};
+            case ApproachId::West:
+                return {1.0, 0.0};
+            }
+            return {0.0, 0.0};
+        }
+
+        RoutePoint outboundDirection(ApproachId approach)
+        {
+            switch (approach)
+            {
+            case ApproachId::North:
+                return {0.0, 1.0};
+            case ApproachId::South:
+                return {0.0, -1.0};
+            case ApproachId::East:
+                return {1.0, 0.0};
+            case ApproachId::West:
+                return {-1.0, 0.0};
+            }
+            return {0.0, 0.0};
+        }
+
+        std::vector<RoutePoint> sampleConnectionPath(const IntersectionConfig &config,
+                                                     const LaneConnectionConfig &connection)
+        {
+            const auto &from_cfg = config.approaches[approachIndex(connection.from_approach)];
+            const auto &to_cfg = config.approaches[approachIndex(connection.to_approach)];
+            const std::size_t from_count = std::max<std::size_t>(1, from_cfg.lanes.size());
+            const std::size_t to_count = std::max<std::size_t>(1, effectiveToLaneCount(to_cfg));
+
+            const RoutePoint p0 = entryPointFor(connection.from_approach, connection.from_lane_index, from_count);
+            const RoutePoint p3 = exitPointFor(connection.to_approach, connection.to_lane_index, to_count);
+
+            if (connection.movement == MovementType::Straight)
+            {
+                return {p0, p3};
+            }
+
+            if (connection.movement == MovementType::Left)
+            {
+                return {p0, RoutePoint{0.0, 0.0}, p3};
+            }
+
+            const RoutePoint in_dir = inboundDirection(connection.from_approach);
+            const RoutePoint out_dir = outboundDirection(connection.to_approach);
+            const double control_distance = 0.18;
+
+            const RoutePoint c1 = {p0.x + in_dir.x * control_distance, p0.y + in_dir.y * control_distance};
+            const RoutePoint c2 = {p3.x - out_dir.x * control_distance, p3.y - out_dir.y * control_distance};
+
+            constexpr int samples = 18;
+            std::vector<RoutePoint> path;
+            path.reserve(samples + 1);
+            for (int i = 0; i <= samples; ++i)
+            {
+                const double t = static_cast<double>(i) / static_cast<double>(samples);
+                const double mt = 1.0 - t;
+                const double b0 = mt * mt * mt;
+                const double b1 = 3.0 * mt * mt * t;
+                const double b2 = 3.0 * mt * t * t;
+                const double b3 = t * t * t;
+                path.push_back({b0 * p0.x + b1 * c1.x + b2 * c2.x + b3 * p3.x,
+                                b0 * p0.y + b1 * c1.y + b2 * c2.y + b3 * p3.y});
+            }
+            return path;
+        }
+
+        double crossProduct(const RoutePoint &a, const RoutePoint &b, const RoutePoint &c)
+        {
+            return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        }
+
+        bool segmentIntersects(const RoutePoint &a, const RoutePoint &b, const RoutePoint &c, const RoutePoint &d)
+        {
+            constexpr double eps = 1e-9;
+
+            const double o1 = crossProduct(a, b, c);
+            const double o2 = crossProduct(a, b, d);
+            const double o3 = crossProduct(c, d, a);
+            const double o4 = crossProduct(c, d, b);
+
+            const bool ab_straddles_cd = (o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps);
+            const bool cd_straddles_ab = (o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps);
+            return ab_straddles_cd && cd_straddles_ab;
+        }
+
+        bool pointInCore(const RoutePoint &p)
+        {
+            return std::abs(p.x) <= 0.55 && std::abs(p.y) <= 0.55;
+        }
+
+        bool segmentIntersectsCore(const RoutePoint &a, const RoutePoint &b)
+        {
+            if (pointInCore(a) || pointInCore(b))
+            {
+                return true;
+            }
+
+            constexpr double core = 0.55;
+            constexpr double eps = 1e-12;
+            double t0 = 0.0;
+            double t1 = 1.0;
+            const double dx = b.x - a.x;
+            const double dy = b.y - a.y;
+
+            auto clip = [&](double p, double q)
+            {
+                if (std::abs(p) <= eps)
+                {
+                    return q >= 0.0;
+                }
+
+                const double r = q / p;
+                if (p < 0.0)
+                {
+                    if (r > t1)
+                    {
+                        return false;
+                    }
+                    if (r > t0)
+                    {
+                        t0 = r;
+                    }
+                }
+                else
+                {
+                    if (r < t0)
+                    {
+                        return false;
+                    }
+                    if (r < t1)
+                    {
+                        t1 = r;
+                    }
+                }
+
+                return true;
+            };
+
+            return clip(-dx, a.x + core) && clip(dx, core - a.x) &&
+                   clip(-dy, a.y + core) && clip(dy, core - a.y);
+        }
+
+        bool pathsConflictInCore(const std::vector<RoutePoint> &lhs, const std::vector<RoutePoint> &rhs)
+        {
+            if (lhs.size() < 2 || rhs.size() < 2)
+            {
+                return false;
+            }
+
+            for (std::size_t i = 1; i < lhs.size(); ++i)
+            {
+                const RoutePoint a = lhs[i - 1];
+                const RoutePoint b = lhs[i];
+                if (!segmentIntersectsCore(a, b))
+                {
+                    continue;
+                }
+
+                for (std::size_t j = 1; j < rhs.size(); ++j)
+                {
+                    const RoutePoint c = rhs[j - 1];
+                    const RoutePoint d = rhs[j];
+                    if (!segmentIntersectsCore(c, d))
+                    {
+                        continue;
+                    }
+
+                    if (segmentIntersects(a, b, c, d))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
     }
 
     SimulatorEngine::SimulatorEngine(double traffic_rate, double ns_duration, double ew_duration)
@@ -359,7 +744,13 @@ namespace crossroads
             controller = std::make_unique<ConfigurableSignalGroupController>(this->intersection_config);
         }
 
-        refreshEffectiveSignalState();
+        route_last_served_time.fill(-1.0);
+        route_green_started_at.fill(-1.0);
+        route_vehicles_started_this_green.fill(0);
+
+        refreshEffectiveSignalState(0.0);
+        previous_controller_state = controller ? controller->getCurrentState() : IntersectionState{};
+        has_previous_controller_state = true;
     }
 
     void SimulatorEngine::simulate(double duration_seconds, double time_step)
@@ -391,7 +782,7 @@ namespace crossroads
         advanceController(dt);
 
         generateTraffic(dt);
-        refreshEffectiveSignalState();
+        refreshEffectiveSignalState(dt);
         std::array<bool, 4> lane_can_move = {
             effective_light_state.north == LightState::Green,
             effective_light_state.south == LightState::Green,
@@ -412,7 +803,13 @@ namespace crossroads
         completeVehicleCrossings();
 
         IntersectionState current_state = controller ? controller->getCurrentState() : IntersectionState{};
-        if (!checker.isSafe(current_state) || !isConfigSignalStateSafe(current_state))
+        bool transition_valid = true;
+        if (control_mode != ControlMode::NullControl && has_previous_controller_state)
+        {
+            transition_valid = !hasRedToOrangeTransition(previous_controller_state, current_state);
+        }
+
+        if (!transition_valid || !checker.isSafe(current_state) || !isConfigSignalStateSafe(current_state))
         {
             safety_violations++;
             if (control_mode != ControlMode::NullControl)
@@ -421,16 +818,158 @@ namespace crossroads
             }
         }
 
+        previous_controller_state = controller ? controller->getCurrentState() : IntersectionState{};
+        has_previous_controller_state = true;
+
         current_time += dt;
     }
 
-    void SimulatorEngine::refreshEffectiveSignalState()
+    void SimulatorEngine::refreshEffectiveSignalState(double dt_seconds)
     {
         IntersectionState base_state = controller ? controller->getCurrentState() : IntersectionState{};
+        const IntersectionState prev_effective = has_previous_effective_light_state ? previous_effective_light_state : IntersectionState{};
+        const auto prev_route_green_active = route_green_active;
+
+        if (!route_conflict_matrix_ready)
+        {
+            route_conflict_matrix = {};
+            route_configured.fill(false);
+
+            std::array<std::vector<std::vector<RoutePoint>>, kRouteCount> route_paths;
+            std::array<std::vector<LaneConnectionConfig>, kRouteCount> route_connections;
+            for (const auto &connection : intersection_config.lane_connections)
+            {
+                const std::size_t idx = routeIndex(connection.from_approach, connection.movement);
+                route_paths[idx].push_back(sampleConnectionPath(intersection_config, connection));
+                route_connections[idx].push_back(connection);
+                route_configured[idx] = true;
+            }
+
+            for (std::size_t i = 0; i < kRouteCount; ++i)
+            {
+                for (std::size_t j = 0; j < kRouteCount; ++j)
+                {
+                    if (i == j || !route_configured[i] || !route_configured[j])
+                    {
+                        route_conflict_matrix[i][j] = false;
+                        continue;
+                    }
+
+                    const ApproachId route_i_approach = static_cast<ApproachId>(i / 3);
+                    const ApproachId route_j_approach = static_cast<ApproachId>(j / 3);
+                    const MovementType route_i_movement = static_cast<MovementType>(i % 3);
+                    const MovementType route_j_movement = static_cast<MovementType>(j % 3);
+                    if (route_i_movement == MovementType::Straight &&
+                        route_j_movement == MovementType::Straight &&
+                        areOpposingApproaches(route_i_approach, route_j_approach))
+                    {
+                        route_conflict_matrix[i][j] = false;
+                        continue;
+                    }
+
+                    bool has_conflict = false;
+
+                    for (const auto &lhs_connection : route_connections[i])
+                    {
+                        for (const auto &rhs_connection : route_connections[j])
+                        {
+                            if (lhs_connection.to_approach == rhs_connection.to_approach &&
+                                lhs_connection.to_lane_index == rhs_connection.to_lane_index)
+                            {
+                                has_conflict = true;
+                                break;
+                            }
+                        }
+                        if (has_conflict)
+                        {
+                            break;
+                        }
+                    }
+
+                    for (const auto &lhs_path : route_paths[i])
+                    {
+                        for (const auto &rhs_path : route_paths[j])
+                        {
+                            if (pathsConflictInCore(lhs_path, rhs_path))
+                            {
+                                has_conflict = true;
+                                break;
+                            }
+                        }
+                        if (has_conflict)
+                        {
+                            break;
+                        }
+                    }
+
+                    route_conflict_matrix[i][j] = has_conflict;
+                }
+            }
+
+            for (std::size_t i = 0; i < kRouteCount; ++i)
+            {
+                for (std::size_t j = 0; j < kRouteCount; ++j)
+                {
+                    if (!route_configured[i] || !route_configured[j])
+                    {
+                        route_conflict_matrix[i][j] = false;
+                        continue;
+                    }
+                    route_conflict_matrix[i][j] = route_conflict_matrix[i][j] || route_conflict_matrix[j][i];
+                }
+            }
+
+            route_conflict_matrix_ready = true;
+        }
+
+        scheduler_anchor_route_index = -1;
+        scheduler_parallel_routes.fill(false);
+        scheduler_blocked_routes.fill(false);
+        scheduler_safety_blocked_routes.fill(false);
+        route_waiting_demand.fill(false);
+        route_wait_seconds.fill(0.0);
+        route_priority_score.fill(0.0);
+        route_green_active.fill(false);
+
+        std::array<bool, 4> has_left_waiting_demand = {false, false, false, false};
+        std::array<bool, 4> has_straight_waiting_demand = {false, false, false, false};
+        std::array<bool, 4> has_right_waiting_demand = {false, false, false, false};
+
+        for (const auto &approach_cfg : intersection_config.approaches)
+        {
+            const ApproachId approach = approach_cfg.id;
+            const Direction dir = directionFromApproach(approach);
+            const auto &queue = traffic.getQueueByDirection(dir);
+            const std::size_t idx = approachIndex(approach);
+
+            has_left_waiting_demand[idx] = std::any_of(queue.begin(), queue.end(),
+                                                       [&](const Vehicle &vehicle)
+                                                       {
+                                                           return vehicle.isWaiting() && isEffectiveLeftTurn(dir, vehicle);
+                                                       });
+
+            has_straight_waiting_demand[idx] = std::any_of(queue.begin(), queue.end(),
+                                                           [](const Vehicle &vehicle)
+                                                           {
+                                                               return vehicle.isWaiting() && vehicle.movement == MovementType::Straight;
+                                                           });
+
+            has_right_waiting_demand[idx] = std::any_of(queue.begin(), queue.end(),
+                                                        [](const Vehicle &vehicle)
+                                                        {
+                                                            return vehicle.isWaiting() && vehicle.movement == MovementType::Right;
+                                                        });
+        }
 
         if (traffic.getTotalWaiting() == 0)
         {
             effective_light_state = IntersectionState{};
+            previous_effective_light_state = effective_light_state;
+            has_previous_effective_light_state = true;
+            minimum_green_hold_until_seconds.fill(0.0);
+            left_wait_seconds.fill(0.0);
+            straight_wait_seconds.fill(0.0);
+            right_wait_seconds.fill(0.0);
             return;
         }
 
@@ -514,7 +1053,6 @@ namespace crossroads
 
             const ApproachId opposing = opposingApproachForRightTurn(approach);
             const bool opposing_red = isApproachMainRed(opposing, effective_light_state);
-            const bool opposing_not_green = approachMainLight(opposing, effective_light_state) != LightState::Green;
             const std::size_t approach_idx = approachIndex(approach);
 
             if (has_demand && opposing_red)
@@ -524,8 +1062,13 @@ namespace crossroads
             }
 
             const bool hold_active = right_turn_green_hold_until[approach_idx] > current_time;
-            const bool turn_green = has_exclusive_demand ? (has_demand || hold_active)
-                                                         : (opposing_red && (has_demand || hold_active));
+            const ApproachId conflicting_left_approach = opposingApproachForLeftTurn(approach);
+            const bool starved_conflicting_left = left_wait_seconds[approachIndex(conflicting_left_approach)] >= left_starvation_threshold_seconds;
+            const bool fairness_blocks_right = starved_conflicting_left && has_left_waiting_demand[approachIndex(conflicting_left_approach)];
+
+            const bool right_candidate_green = has_exclusive_demand ? (has_demand || hold_active)
+                                                                    : (opposing_red && (has_demand || hold_active));
+            const bool turn_green = right_candidate_green && !fairness_blocks_right;
             setRightTurnLight(effective_light_state, approach, turn_green ? LightState::Green : LightState::Red);
         }
 
@@ -574,7 +1117,11 @@ namespace crossroads
                 cross_traffic_main_red = (effective_light_state.north == LightState::Red && effective_light_state.south == LightState::Red);
             }
 
-            const bool left_green = has_demand && opposing_red && opposing_right_red && cross_traffic_main_red;
+            const bool opposing_straight_starved = straight_wait_seconds[approachIndex(opposing)] >= straight_starvation_threshold_seconds;
+            const bool opposing_has_straight_waiting = has_straight_waiting_demand[approachIndex(opposing)];
+            const bool fairness_blocks_left = opposing_straight_starved && opposing_has_straight_waiting;
+
+            const bool left_green = has_demand && opposing_red && opposing_right_red && cross_traffic_main_red && !fairness_blocks_left;
             setLeftTurnLight(effective_light_state, approach, left_green ? LightState::Green : LightState::Red);
 
             const bool has_dedicated_left_crossing = std::any_of(queue.begin(), queue.end(),
@@ -628,10 +1175,445 @@ namespace crossroads
                 const LightState approach_main = approachMainLight(approach, effective_light_state);
                 if (approach_main == LightState::Green)
                 {
-                    setApproachMainLight(effective_light_state, opposing, LightState::Red);
+                    const bool opposing_straight_starved = straight_wait_seconds[approachIndex(opposing)] >= straight_starvation_threshold_seconds;
+                    const bool opposing_has_straight_waiting = has_straight_waiting_demand[approachIndex(opposing)];
+                    if (!(opposing_straight_starved && opposing_has_straight_waiting))
+                    {
+                        setApproachMainLight(effective_light_state, opposing, LightState::Red);
+                    }
                 }
             }
         }
+
+        for (const auto &approach_cfg : intersection_config.approaches)
+        {
+            const ApproachId approach = approach_cfg.id;
+            const Direction dir = directionFromApproach(approach);
+            const auto &queue = traffic.getQueueByDirection(dir);
+            const std::size_t idx = approachIndex(approach);
+
+            bool left_is_being_served = false;
+            bool straight_is_being_served = false;
+            bool right_is_being_served = false;
+
+            for (const auto &vehicle : queue)
+            {
+                if (vehicle.isCrossing())
+                {
+                    if (isEffectiveLeftTurn(dir, vehicle))
+                    {
+                        left_is_being_served = true;
+                    }
+                    if (vehicle.movement == MovementType::Straight)
+                    {
+                        straight_is_being_served = true;
+                    }
+                    if (vehicle.movement == MovementType::Right)
+                    {
+                        right_is_being_served = true;
+                    }
+                }
+            }
+
+            if (has_left_waiting_demand[idx] && !left_is_being_served)
+            {
+                left_wait_seconds[idx] += std::max(0.0, dt_seconds);
+            }
+            else
+            {
+                left_wait_seconds[idx] = 0.0;
+            }
+
+            if (has_straight_waiting_demand[idx] && !straight_is_being_served)
+            {
+                straight_wait_seconds[idx] += std::max(0.0, dt_seconds);
+            }
+            else
+            {
+                straight_wait_seconds[idx] = 0.0;
+            }
+
+            if (has_right_waiting_demand[idx] && !right_is_being_served)
+            {
+                right_wait_seconds[idx] += std::max(0.0, dt_seconds);
+            }
+            else
+            {
+                right_wait_seconds[idx] = 0.0;
+            }
+        }
+
+        struct RouteCandidate
+        {
+            ApproachId approach;
+            MovementType movement;
+            bool waiting_demand;
+            std::size_t demand_count;
+            double wait_seconds;
+        };
+
+        std::array<RouteCandidate, kRouteCount> routes{};
+        for (int approach_int = 0; approach_int < 4; ++approach_int)
+        {
+            ApproachId approach = static_cast<ApproachId>(approach_int);
+            for (int movement_int = 0; movement_int < 3; ++movement_int)
+            {
+                MovementType movement = static_cast<MovementType>(movement_int);
+                const std::size_t idx = routeIndex(approach, movement);
+                routes[idx] = {approach, movement, false, 0u, 0.0};
+            }
+        }
+
+        for (const auto &approach_cfg : intersection_config.approaches)
+        {
+            const ApproachId approach = approach_cfg.id;
+            const std::size_t idx = approachIndex(approach);
+
+            auto count_waiting = [&](MovementType movement)
+            {
+                const Direction dir = directionFromApproach(approach);
+                const auto &queue = traffic.getQueueByDirection(dir);
+                return static_cast<std::size_t>(std::count_if(queue.begin(), queue.end(),
+                                                              [&](const Vehicle &vehicle)
+                                                              {
+                                                                  if (!vehicle.isWaiting())
+                                                                  {
+                                                                      return false;
+                                                                  }
+                                                                  switch (movement)
+                                                                  {
+                                                                  case MovementType::Straight:
+                                                                      return vehicle.movement == MovementType::Straight;
+                                                                  case MovementType::Left:
+                                                                      return isEffectiveLeftTurn(dir, vehicle);
+                                                                  case MovementType::Right:
+                                                                      return vehicle.movement == MovementType::Right;
+                                                                  }
+                                                                  return false;
+                                                              }));
+            };
+
+            const std::size_t straight_idx = routeIndex(approach, MovementType::Straight);
+            const std::size_t left_idx = routeIndex(approach, MovementType::Left);
+            const std::size_t right_idx = routeIndex(approach, MovementType::Right);
+
+            if (route_configured[straight_idx])
+            {
+                routes[straight_idx] = {approach, MovementType::Straight, has_straight_waiting_demand[idx], count_waiting(MovementType::Straight), straight_wait_seconds[idx]};
+            }
+            if (route_configured[left_idx])
+            {
+                routes[left_idx] = {approach, MovementType::Left, has_left_waiting_demand[idx], count_waiting(MovementType::Left), left_wait_seconds[idx]};
+            }
+            if (route_configured[right_idx])
+            {
+                routes[right_idx] = {approach, MovementType::Right, has_right_waiting_demand[idx], count_waiting(MovementType::Right), right_wait_seconds[idx]};
+            }
+
+            route_waiting_demand[straight_idx] = routes[straight_idx].waiting_demand;
+            route_waiting_demand[left_idx] = routes[left_idx].waiting_demand;
+            route_waiting_demand[right_idx] = routes[right_idx].waiting_demand;
+            route_wait_seconds[straight_idx] = routes[straight_idx].wait_seconds;
+            route_wait_seconds[left_idx] = routes[left_idx].wait_seconds;
+            route_wait_seconds[right_idx] = routes[right_idx].wait_seconds;
+        }
+
+        int anchor_route_index = -1;
+        double anchor_score = -1.0;
+        for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx)
+        {
+            if (!route_configured[route_idx])
+            {
+                continue;
+            }
+            const auto &route = routes[route_idx];
+            if (!route.waiting_demand)
+            {
+                continue;
+            }
+
+            const double aging_seconds = route_last_served_time[route_idx] >= 0.0
+                                             ? std::max(0.0, current_time - route_last_served_time[route_idx])
+                                             : movement_starvation_max_wait_seconds;
+            const double demand_pressure = static_cast<double>(route.demand_count);
+            double score =
+                route_priority_wait_weight * route.wait_seconds +
+                route_priority_queue_weight * demand_pressure +
+                route_priority_aging_weight * aging_seconds +
+                (0.75 * route.wait_seconds * demand_pressure);
+
+            constexpr double kMinimumGreenLockBonus = 1'000'000.0;
+            constexpr double kServiceContinuationBonus = 25'000.0;
+            constexpr double kStarvationBonus = 20'000.0;
+
+            int conflicting_waiting_routes = 0;
+            for (std::size_t other_idx = 0; other_idx < routes.size(); ++other_idx)
+            {
+                if (other_idx == route_idx)
+                {
+                    continue;
+                }
+                if (!route_configured[other_idx] || !routes[other_idx].waiting_demand)
+                {
+                    continue;
+                }
+                if (route_conflict_matrix[route_idx][other_idx])
+                {
+                    ++conflicting_waiting_routes;
+                }
+            }
+
+            if (prev_route_green_active[route_idx])
+            {
+                const double green_started_at = route_green_started_at[route_idx] >= 0.0 ? route_green_started_at[route_idx] : current_time;
+                const double green_elapsed = std::max(0.0, current_time - green_started_at);
+                if (green_elapsed < minimum_green_seconds)
+                {
+                    score += kMinimumGreenLockBonus;
+                }
+                else
+                {
+                    const double started_this_green = static_cast<double>(route_vehicles_started_this_green[route_idx]);
+                    const double remaining_queue_estimate = std::max(0.0, demand_pressure - started_this_green);
+                    double continuation_bonus = 4000.0 + std::min(26000.0, remaining_queue_estimate * 3200.0);
+                    continuation_bonus -= static_cast<double>(conflicting_waiting_routes) * 3500.0;
+
+                    if (conflicting_waiting_routes > 0 && green_elapsed >= route_max_green_seconds)
+                    {
+                        continuation_bonus -= 9000.0;
+                    }
+
+                    score += std::max(0.0, continuation_bonus);
+                }
+            }
+
+            if (route.wait_seconds >= movement_starvation_max_wait_seconds)
+            {
+                score += kStarvationBonus;
+            }
+
+            route_priority_score[route_idx] = score;
+
+            if (score > anchor_score)
+            {
+                anchor_score = score;
+                anchor_route_index = static_cast<int>(route_idx);
+            }
+        }
+
+        if (anchor_route_index >= 0)
+        {
+            scheduler_anchor_route_index = anchor_route_index;
+
+            IntersectionState override_state = effective_light_state;
+
+            for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx)
+            {
+                if (!route_configured[route_idx])
+                {
+                    continue;
+                }
+                if (!route_conflict_matrix[static_cast<std::size_t>(anchor_route_index)][route_idx])
+                {
+                    continue;
+                }
+                scheduler_blocked_routes[route_idx] = true;
+                setRouteLight(override_state, routes[route_idx].approach, routes[route_idx].movement, LightState::Red);
+            }
+
+            setRouteLight(override_state,
+                          routes[static_cast<std::size_t>(anchor_route_index)].approach,
+                          routes[static_cast<std::size_t>(anchor_route_index)].movement,
+                          LightState::Green);
+
+            if (!checker.isSafe(override_state))
+            {
+                scheduler_safety_blocked_routes[static_cast<std::size_t>(anchor_route_index)] = true;
+            }
+            else
+            {
+                effective_light_state = override_state;
+            }
+
+            std::vector<std::size_t> parallel_candidates;
+            parallel_candidates.reserve(routes.size());
+            for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx)
+            {
+                if (!route_configured[route_idx])
+                {
+                    continue;
+                }
+                if (static_cast<int>(route_idx) == anchor_route_index)
+                {
+                    continue;
+                }
+                if (!routes[route_idx].waiting_demand)
+                {
+                    continue;
+                }
+                if (route_conflict_matrix[static_cast<std::size_t>(anchor_route_index)][route_idx])
+                {
+                    continue;
+                }
+                parallel_candidates.push_back(route_idx);
+            }
+
+            std::sort(parallel_candidates.begin(), parallel_candidates.end(),
+                      [&](std::size_t lhs, std::size_t rhs)
+                      {
+                          const double lhs_score = route_priority_score[lhs];
+                          const double rhs_score = route_priority_score[rhs];
+                          return lhs_score > rhs_score;
+                      });
+
+            std::vector<std::size_t> selected_parallel;
+            for (std::size_t candidate_idx : parallel_candidates)
+            {
+                bool conflicts = false;
+                for (std::size_t accepted_idx : selected_parallel)
+                {
+                    if (route_conflict_matrix[candidate_idx][accepted_idx])
+                    {
+                        conflicts = true;
+                        break;
+                    }
+                }
+                if (conflicts)
+                {
+                    continue;
+                }
+
+                IntersectionState trial_state = override_state;
+                setRouteLight(trial_state,
+                              routes[candidate_idx].approach,
+                              routes[candidate_idx].movement,
+                              LightState::Green);
+
+                if (!checker.isSafe(trial_state))
+                {
+                    scheduler_safety_blocked_routes[candidate_idx] = true;
+                    continue;
+                }
+
+                override_state = trial_state;
+                selected_parallel.push_back(candidate_idx);
+                scheduler_parallel_routes[candidate_idx] = true;
+            }
+
+            if (checker.isSafe(override_state))
+            {
+                effective_light_state = override_state;
+            }
+        }
+
+        auto apply_minimum_green_hold = [&](std::size_t index, LightState &current_light, LightState previous_light)
+        {
+            const bool was_green = previous_light == LightState::Green;
+            const bool is_green = current_light == LightState::Green;
+
+            if (!was_green && is_green)
+            {
+                minimum_green_hold_until_seconds[index] = current_time + minimum_green_seconds;
+                return;
+            }
+
+            if (was_green && !is_green && current_time < minimum_green_hold_until_seconds[index])
+            {
+                current_light = LightState::Green;
+            }
+        };
+
+        auto apply_transition_discipline = [&](std::size_t index, LightState &current_light, LightState previous_light)
+        {
+            const bool was_orange = previous_light == LightState::Orange;
+
+            if (previous_light == LightState::Red && current_light == LightState::Orange)
+            {
+                current_light = LightState::Red;
+                return;
+            }
+
+            if (previous_light == LightState::Green && current_light == LightState::Red)
+            {
+                current_light = LightState::Orange;
+            }
+
+            const bool is_orange = current_light == LightState::Orange;
+            if (!was_orange && is_orange)
+            {
+                minimum_orange_hold_until_seconds[index] = current_time + SafetyChecker::ORANGE_DURATION;
+                return;
+            }
+
+            if (was_orange)
+            {
+                const double hold_until = minimum_orange_hold_until_seconds[index];
+                if (current_time < hold_until)
+                {
+                    current_light = LightState::Orange;
+                    return;
+                }
+
+                if (current_light == LightState::Green)
+                {
+                    current_light = LightState::Red;
+                }
+            }
+        };
+
+        apply_transition_discipline(0, effective_light_state.north, prev_effective.north);
+        apply_transition_discipline(1, effective_light_state.east, prev_effective.east);
+        apply_transition_discipline(2, effective_light_state.south, prev_effective.south);
+        apply_transition_discipline(3, effective_light_state.west, prev_effective.west);
+        apply_transition_discipline(4, effective_light_state.turnSouthEast, prev_effective.turnSouthEast);
+        apply_transition_discipline(5, effective_light_state.turnNorthWest, prev_effective.turnNorthWest);
+        apply_transition_discipline(6, effective_light_state.turnWestSouth, prev_effective.turnWestSouth);
+        apply_transition_discipline(7, effective_light_state.turnEastNorth, prev_effective.turnEastNorth);
+        apply_transition_discipline(8, effective_light_state.turnNorthEast, prev_effective.turnNorthEast);
+        apply_transition_discipline(9, effective_light_state.turnSouthWest, prev_effective.turnSouthWest);
+        apply_transition_discipline(10, effective_light_state.turnEastSouth, prev_effective.turnEastSouth);
+        apply_transition_discipline(11, effective_light_state.turnWestNorth, prev_effective.turnWestNorth);
+
+        apply_minimum_green_hold(0, effective_light_state.north, prev_effective.north);
+        apply_minimum_green_hold(1, effective_light_state.east, prev_effective.east);
+        apply_minimum_green_hold(2, effective_light_state.south, prev_effective.south);
+        apply_minimum_green_hold(3, effective_light_state.west, prev_effective.west);
+        apply_minimum_green_hold(4, effective_light_state.turnSouthEast, prev_effective.turnSouthEast);
+        apply_minimum_green_hold(5, effective_light_state.turnNorthWest, prev_effective.turnNorthWest);
+        apply_minimum_green_hold(6, effective_light_state.turnWestSouth, prev_effective.turnWestSouth);
+        apply_minimum_green_hold(7, effective_light_state.turnEastNorth, prev_effective.turnEastNorth);
+        apply_minimum_green_hold(8, effective_light_state.turnNorthEast, prev_effective.turnNorthEast);
+        apply_minimum_green_hold(9, effective_light_state.turnSouthWest, prev_effective.turnSouthWest);
+        apply_minimum_green_hold(10, effective_light_state.turnEastSouth, prev_effective.turnEastSouth);
+        apply_minimum_green_hold(11, effective_light_state.turnWestNorth, prev_effective.turnWestNorth);
+
+        for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx)
+        {
+            if (!route_configured[route_idx])
+            {
+                route_green_active[route_idx] = false;
+                continue;
+            }
+
+            const bool is_green = routeIsGreen(effective_light_state, routes[route_idx].approach, routes[route_idx].movement);
+            const bool was_green = prev_route_green_active[route_idx];
+            route_green_active[route_idx] = is_green;
+
+            if (!was_green && is_green)
+            {
+                route_green_started_at[route_idx] = current_time;
+                route_vehicles_started_this_green[route_idx] = 0;
+            }
+            else if (was_green && !is_green)
+            {
+                route_last_served_time[route_idx] = current_time;
+                route_green_started_at[route_idx] = -1.0;
+                route_vehicles_started_this_green[route_idx] = 0;
+            }
+        }
+
+        previous_effective_light_state = effective_light_state;
+        has_previous_effective_light_state = true;
     }
 
     void SimulatorEngine::generateTraffic(double dt)
@@ -700,6 +1682,17 @@ namespace crossroads
                 bool can_cross = signalAllowsVehicle(lane, vehicle, lane_cfg, effective_light_state);
                 if (can_cross)
                 {
+                    const ApproachId approach = approachFromDirection(lane);
+                    MovementType route_movement = vehicle.movement;
+                    if (isEffectiveLeftTurn(lane, vehicle))
+                    {
+                        route_movement = MovementType::Left;
+                    }
+                    const std::size_t route_idx = routeIndex(approach, route_movement);
+                    if (route_idx < route_vehicles_started_this_green.size() && route_configured[route_idx] && route_green_active[route_idx])
+                    {
+                        route_vehicles_started_this_green[route_idx] += 1;
+                    }
                     vehicle.crossing_time = current_time;
                 }
             }
@@ -896,6 +1889,144 @@ namespace crossroads
         out << "\"south\":" << (protectedLeftAllowed(Direction::South, snapshot.lights) ? "true" : "false") << ",";
         out << "\"west\":" << (protectedLeftAllowed(Direction::West, snapshot.lights) ? "true" : "false");
         out << "},";
+        out << "\"scheduler\":{";
+        out << "\"wmax_seconds\":" << movement_starvation_max_wait_seconds << ",";
+        out << "\"anchor_route\":";
+        if (scheduler_anchor_route_index >= 0 && route_configured[static_cast<std::size_t>(scheduler_anchor_route_index)])
+        {
+            const std::size_t anchor_idx = static_cast<std::size_t>(scheduler_anchor_route_index);
+            ApproachId anchor_approach = static_cast<ApproachId>(anchor_idx / 3);
+            MovementType anchor_movement = static_cast<MovementType>(anchor_idx % 3);
+            out << "\"" << routeName(anchor_approach, anchor_movement) << "\"";
+        }
+        else
+        {
+            out << "\"\"";
+        }
+        out << ",";
+        out << "\"routes\":[";
+        auto route_activation_reason = [&](std::size_t idx)
+        {
+            if (!route_waiting_demand[idx])
+            {
+                return "no_demand";
+            }
+
+            if (route_green_active[idx])
+            {
+                return "green_active";
+            }
+
+            if (scheduler_blocked_routes[idx])
+            {
+                return "blocked_by_anchor";
+            }
+
+            if (scheduler_safety_blocked_routes[idx])
+            {
+                return "blocked_by_safety";
+            }
+
+            bool conflicting_green_active = false;
+            for (std::size_t other_idx = 0; other_idx < route_green_active.size(); ++other_idx)
+            {
+                if (other_idx == idx || !route_configured[other_idx])
+                {
+                    continue;
+                }
+                if (route_conflict_matrix[idx][other_idx] && route_green_active[other_idx])
+                {
+                    conflicting_green_active = true;
+                    break;
+                }
+            }
+            if (conflicting_green_active)
+            {
+                return "waiting_conflict_clearance";
+            }
+
+            const bool selected = (scheduler_anchor_route_index >= 0 && static_cast<std::size_t>(scheduler_anchor_route_index) == idx) ||
+                                  scheduler_parallel_routes[idx];
+            if (selected)
+            {
+                return "selected_pending_transition";
+            }
+
+            if (scheduler_anchor_route_index >= 0)
+            {
+                return "waiting_scheduler_turn";
+            }
+
+            return "waiting_controller_phase";
+        };
+
+        bool first_route = true;
+        for (int approach_int = 0; approach_int < 4; ++approach_int)
+        {
+            ApproachId approach = static_cast<ApproachId>(approach_int);
+            for (int movement_int = 0; movement_int < 3; ++movement_int)
+            {
+                MovementType movement = static_cast<MovementType>(movement_int);
+                const std::size_t idx = routeIndex(approach, movement);
+                if (!route_configured[idx])
+                {
+                    continue;
+                }
+                if (!first_route)
+                {
+                    out << ",";
+                }
+                first_route = false;
+
+                out << "{";
+                out << "\"route\":\"" << routeName(approach, movement) << "\",";
+                out << "\"approach\":\"" << toString(approach) << "\",";
+                out << "\"movement\":\"" << toString(movement) << "\",";
+                out << "\"waiting_demand\":" << (route_waiting_demand[idx] ? "true" : "false") << ",";
+                out << "\"wait_seconds\":" << route_wait_seconds[idx] << ",";
+                out << "\"priority_score\":" << route_priority_score[idx] << ",";
+                out << "\"green_active\":" << (route_green_active[idx] ? "true" : "false") << ",";
+                const bool selected = (scheduler_anchor_route_index >= 0 && static_cast<std::size_t>(scheduler_anchor_route_index) == idx) ||
+                                      scheduler_parallel_routes[idx];
+                out << "\"selected\":" << (selected ? "true" : "false") << ",";
+                out << "\"parallel_active\":" << (scheduler_parallel_routes[idx] ? "true" : "false") << ",";
+                out << "\"blocked_by_anchor\":" << (scheduler_blocked_routes[idx] ? "true" : "false") << ",";
+                out << "\"blocked_by_safety\":" << (scheduler_safety_blocked_routes[idx] ? "true" : "false") << ",";
+                out << "\"vehicles_started_this_green\":" << route_vehicles_started_this_green[idx] << ",";
+                out << "\"activation_reason\":\"" << route_activation_reason(idx) << "\",";
+                out << "\"conflicts\":[";
+
+                bool first_conflict = true;
+                for (int other_approach_int = 0; other_approach_int < 4; ++other_approach_int)
+                {
+                    ApproachId other_approach = static_cast<ApproachId>(other_approach_int);
+                    for (int other_movement_int = 0; other_movement_int < 3; ++other_movement_int)
+                    {
+                        MovementType other_movement = static_cast<MovementType>(other_movement_int);
+                        const std::size_t other_idx = routeIndex(other_approach, other_movement);
+                        if (!route_configured[other_idx])
+                        {
+                            continue;
+                        }
+                        if (!route_conflict_matrix[idx][other_idx])
+                        {
+                            continue;
+                        }
+                        if (!first_conflict)
+                        {
+                            out << ",";
+                        }
+                        first_conflict = false;
+                        out << "\"" << routeName(other_approach, other_movement) << "\"";
+                    }
+                }
+
+                out << "]";
+                out << "}";
+            }
+        }
+        out << "]";
+        out << "},";
         out << "\"spawn\":{";
         out << "\"rate\":" << traffic.getArrivalRate() << ",";
         auto spawn_filter = traffic.getSpawnLaneFilter();
@@ -933,7 +2064,27 @@ namespace crossroads
         traffic.reset();
         setControlMode(ControlMode::Basic);
         right_turn_green_hold_until = {0.0, 0.0, 0.0, 0.0};
-        refreshEffectiveSignalState();
+        left_wait_seconds = {0.0, 0.0, 0.0, 0.0};
+        straight_wait_seconds = {0.0, 0.0, 0.0, 0.0};
+        right_wait_seconds = {0.0, 0.0, 0.0, 0.0};
+        route_waiting_demand.fill(false);
+        route_wait_seconds.fill(0.0);
+        route_priority_score.fill(0.0);
+        route_green_active.fill(false);
+        route_last_served_time.fill(-1.0);
+        route_green_started_at.fill(-1.0);
+        route_vehicles_started_this_green.fill(0);
+        scheduler_anchor_route_index = -1;
+        scheduler_parallel_routes.fill(false);
+        scheduler_blocked_routes.fill(false);
+        scheduler_safety_blocked_routes.fill(false);
+        minimum_green_hold_until_seconds.fill(0.0);
+        minimum_orange_hold_until_seconds.fill(0.0);
+        previous_effective_light_state = IntersectionState{};
+        has_previous_effective_light_state = false;
+        refreshEffectiveSignalState(0.0);
+        previous_controller_state = controller ? controller->getCurrentState() : IntersectionState{};
+        has_previous_controller_state = true;
     }
 
     void SimulatorEngine::start()
@@ -1000,6 +2151,8 @@ namespace crossroads
         }
 
         controller->reset();
+        previous_controller_state = controller ? controller->getCurrentState() : IntersectionState{};
+        has_previous_controller_state = true;
     }
 
     SimulatorEngine::ControlMode SimulatorEngine::getControlMode() const
@@ -1015,6 +2168,8 @@ namespace crossroads
         {
             controller->reset();
         }
+        previous_controller_state = controller ? controller->getCurrentState() : IntersectionState{};
+        has_previous_controller_state = true;
     }
 
     const IntersectionConfig &SimulatorEngine::getIntersectionConfig() const
@@ -1134,6 +2289,42 @@ namespace crossroads
         auto is_active = [](LightState value)
         { return value == LightState::Green || value == LightState::Orange; };
 
+        auto is_movement_active = [&](ApproachId approach, MovementType movement)
+        {
+            switch (movement)
+            {
+            case MovementType::Straight:
+                return is_active(approachMainLight(approach, state));
+            case MovementType::Left:
+                switch (approach)
+                {
+                case ApproachId::North:
+                    return is_active(state.turnNorthEast);
+                case ApproachId::South:
+                    return is_active(state.turnSouthWest);
+                case ApproachId::East:
+                    return is_active(state.turnEastSouth);
+                case ApproachId::West:
+                    return is_active(state.turnWestNorth);
+                }
+                return false;
+            case MovementType::Right:
+                switch (approach)
+                {
+                case ApproachId::North:
+                    return is_active(state.turnNorthWest);
+                case ApproachId::South:
+                    return is_active(state.turnSouthEast);
+                case ApproachId::East:
+                    return is_active(state.turnEastNorth);
+                case ApproachId::West:
+                    return is_active(state.turnWestSouth);
+                }
+                return false;
+            }
+            return false;
+        };
+
         auto findApproachForLane = [&](LaneId lane_id, ApproachId &approach_out)
         {
             for (const auto &approach : intersection_config.approaches)
@@ -1152,57 +2343,37 @@ namespace crossroads
 
         std::unordered_set<SignalGroupId> active_ids;
 
-        auto includeMatchingGroups = [&](ApproachId approach, MovementType movement)
+        for (const auto &group : intersection_config.signal_groups)
         {
-            for (const auto &group : intersection_config.signal_groups)
+            bool group_active = false;
+            for (LaneId lane_id : group.controlled_lanes)
             {
-                bool movement_match = std::find(group.green_movements.begin(), group.green_movements.end(), movement) != group.green_movements.end();
-                if (!movement_match)
+                ApproachId lane_approach;
+                if (!findApproachForLane(lane_id, lane_approach))
                 {
                     continue;
                 }
 
-                for (LaneId lane_id : group.controlled_lanes)
+                for (MovementType movement : group.green_movements)
                 {
-                    ApproachId lane_approach;
-                    if (findApproachForLane(lane_id, lane_approach) && lane_approach == approach)
+                    if (is_movement_active(lane_approach, movement))
                     {
-                        active_ids.insert(group.id);
+                        group_active = true;
                         break;
                     }
                 }
+
+                if (group_active)
+                {
+                    break;
+                }
             }
-        };
 
-        if (is_active(state.north))
-        {
-            includeMatchingGroups(ApproachId::North, MovementType::Straight);
-            includeMatchingGroups(ApproachId::North, MovementType::Left);
+            if (group_active)
+            {
+                active_ids.insert(group.id);
+            }
         }
-        if (is_active(state.south))
-        {
-            includeMatchingGroups(ApproachId::South, MovementType::Straight);
-            includeMatchingGroups(ApproachId::South, MovementType::Left);
-        }
-        if (is_active(state.east))
-        {
-            includeMatchingGroups(ApproachId::East, MovementType::Straight);
-            includeMatchingGroups(ApproachId::East, MovementType::Left);
-        }
-        if (is_active(state.west))
-        {
-            includeMatchingGroups(ApproachId::West, MovementType::Straight);
-            includeMatchingGroups(ApproachId::West, MovementType::Left);
-        }
-
-        if (is_active(state.turnSouthEast))
-            includeMatchingGroups(ApproachId::South, MovementType::Right);
-        if (is_active(state.turnNorthWest))
-            includeMatchingGroups(ApproachId::North, MovementType::Right);
-        if (is_active(state.turnWestSouth))
-            includeMatchingGroups(ApproachId::West, MovementType::Right);
-        if (is_active(state.turnEastNorth))
-            includeMatchingGroups(ApproachId::East, MovementType::Right);
 
         return std::vector<SignalGroupId>(active_ids.begin(), active_ids.end());
     }

@@ -9,6 +9,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <nlohmann/json.hpp>
 #include "SimulatorEngine.hpp"
 #include "SimpleHttpUiServer.hpp"
 #include "IntersectionConfigJson.hpp"
@@ -18,6 +19,17 @@
 namespace
 {
     std::atomic<bool> g_keep_running{true};
+
+    std::string trimCopy(std::string value)
+    {
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch)
+                                                { return !std::isspace(ch); }));
+        value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char ch)
+                                 { return !std::isspace(ch); })
+                        .base(),
+                    value.end());
+        return value;
+    }
 
     void handleSignal(int)
     {
@@ -66,6 +78,20 @@ int main()
     else
     {
         database.saveActiveIntersectionConfigJson(crossroads::intersectionConfigToJson(initial_config), &db_error);
+    }
+
+    std::string initial_config_json = crossroads::intersectionConfigToJson(initial_config);
+    if (!database.loadMostRecentNamedConfigName(&db_error).has_value())
+    {
+        std::string seed_error;
+        if (!database.saveNamedIntersectionConfigJson("Standaard", initial_config_json, &seed_error))
+        {
+            std::cerr << "Warning: failed to seed named config: " << seed_error << std::endl;
+        }
+        else
+        {
+            database.touchNamedIntersectionConfig("Standaard", &seed_error);
+        }
     }
 
     crossroads::SimulatorEngine engine(initial_config, traffic_rate, kNorthSouthDuration, kEastWestDuration);
@@ -206,6 +232,168 @@ int main()
         [&](const std::string &body)
         {
             std::lock_guard<std::mutex> lock(engine_mutex);
+
+            nlohmann::json request = nlohmann::json::parse(body, nullptr, false);
+            if (request.is_object() && request.contains("action") && request["action"].is_string())
+            {
+                const std::string action = request["action"].get<std::string>();
+                std::string error;
+
+                if (action == "list_named")
+                {
+                    const auto entries = database.listNamedIntersectionConfigs(&error);
+                    if (!error.empty())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{500, crossroads::validationErrorsToJson({"database error: " + error})};
+                    }
+
+                    nlohmann::json resp;
+                    resp["ok"] = true;
+                    resp["items"] = nlohmann::json::array();
+                    for (const auto &entry : entries)
+                    {
+                        resp["items"].push_back({{"name", entry.name},
+                                                 {"updated_at", entry.updated_at},
+                                                 {"last_used_at", entry.last_used_at}});
+                    }
+                    return crossroads::SimpleHttpUiServer::ConfigMutationResult{200, resp.dump()};
+                }
+
+                if (action == "last_used_name")
+                {
+                    nlohmann::json resp;
+                    resp["ok"] = true;
+                    if (auto name = database.loadMostRecentNamedConfigName(&error); name.has_value())
+                    {
+                        resp["name"] = *name;
+                    }
+                    else
+                    {
+                        resp["name"] = "";
+                    }
+                    return crossroads::SimpleHttpUiServer::ConfigMutationResult{200, resp.dump()};
+                }
+
+                if (action == "load_named")
+                {
+                    if (!request.contains("name") || !request["name"].is_string())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"name is required"})};
+                    }
+                    const std::string name = trimCopy(request["name"].get<std::string>());
+                    if (name.empty())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"name is required"})};
+                    }
+
+                    auto json_text = database.loadNamedIntersectionConfigJson(name, &error);
+                    if (!json_text.has_value())
+                    {
+                        const std::string msg = !error.empty() ? ("database error: " + error) : "named configuration not found";
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{404, crossroads::validationErrorsToJson({msg})};
+                    }
+
+                    crossroads::ConfigParseResult parsed = crossroads::intersectionConfigFromJson(*json_text);
+                    crossroads::SafetyChecker checker(parsed.config);
+                    if (!parsed.ok || !checker.isConfigValid())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"stored config is invalid"})};
+                    }
+
+                    database.touchNamedIntersectionConfig(name, &error);
+
+                    nlohmann::json resp;
+                    resp["ok"] = true;
+                    resp["name"] = name;
+                    resp["config"] = nlohmann::json::parse(crossroads::intersectionConfigToJson(parsed.config));
+                    return crossroads::SimpleHttpUiServer::ConfigMutationResult{200, resp.dump()};
+                }
+
+                if (action == "save_named")
+                {
+                    if (!request.contains("name") || !request["name"].is_string())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"name is required"})};
+                    }
+                    if (!request.contains("config"))
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"config is required"})};
+                    }
+
+                    const std::string name = trimCopy(request["name"].get<std::string>());
+                    if (name.empty())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"name is required"})};
+                    }
+
+                    std::string config_json;
+                    if (request["config"].is_string())
+                    {
+                        config_json = request["config"].get<std::string>();
+                    }
+                    else
+                    {
+                        config_json = request["config"].dump();
+                    }
+
+                    crossroads::ConfigParseResult parsed = crossroads::intersectionConfigFromJson(config_json);
+                    if (!parsed.ok)
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson(parsed.errors)};
+                    }
+
+                    crossroads::SafetyChecker checker(parsed.config);
+                    if (!checker.isConfigValid())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"config failed safety validation rules"})};
+                    }
+
+                    const std::string normalized_json = crossroads::intersectionConfigToJson(parsed.config);
+                    if (!database.saveNamedIntersectionConfigJson(name, normalized_json, &error))
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{500, crossroads::validationErrorsToJson({"database error: " + error})};
+                    }
+                    database.touchNamedIntersectionConfig(name, &error);
+
+                    nlohmann::json resp;
+                    resp["ok"] = true;
+                    resp["name"] = name;
+                    return crossroads::SimpleHttpUiServer::ConfigMutationResult{200, resp.dump()};
+                }
+
+                if (action == "delete_named")
+                {
+                    if (!request.contains("name") || !request["name"].is_string())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"name is required"})};
+                    }
+
+                    const std::string name = trimCopy(request["name"].get<std::string>());
+                    if (name.empty())
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"name is required"})};
+                    }
+
+                    auto existing = database.loadNamedIntersectionConfigJson(name, &error);
+                    if (!existing.has_value())
+                    {
+                        const std::string msg = !error.empty() ? ("database error: " + error) : "named configuration not found";
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{404, crossroads::validationErrorsToJson({msg})};
+                    }
+
+                    if (!database.deleteNamedIntersectionConfig(name, &error))
+                    {
+                        return crossroads::SimpleHttpUiServer::ConfigMutationResult{500, crossroads::validationErrorsToJson({"database error: " + error})};
+                    }
+
+                    nlohmann::json resp;
+                    resp["ok"] = true;
+                    resp["name"] = name;
+                    return crossroads::SimpleHttpUiServer::ConfigMutationResult{200, resp.dump()};
+                }
+
+                return crossroads::SimpleHttpUiServer::ConfigMutationResult{400, crossroads::validationErrorsToJson({"unknown action"})};
+            }
 
             crossroads::ConfigParseResult parsed = crossroads::intersectionConfigFromJson(body);
             if (!parsed.ok)

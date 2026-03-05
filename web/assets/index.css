@@ -32,6 +32,39 @@ body {
     min-width: 180px;
 }
 
+.scheduler-debug {
+    margin-top: 14px;
+}
+
+.scheduler-debug h3 {
+    margin: 0 0 8px;
+    font-size: 16px;
+}
+
+.scheduler-table-wrap {
+    margin-top: 8px;
+    overflow-x: auto;
+}
+
+.scheduler-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.scheduler-table th,
+.scheduler-table td {
+    border: 1px solid #374151;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.scheduler-table th {
+    background: #111827;
+    color: #cbd5e1;
+}
+
 button {
     background: #2563eb;
     color: white;

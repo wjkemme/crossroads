@@ -43,7 +43,9 @@ crossroads/
 ## Traffic light states and transitions
 - Add `Orange` (amber) light state in addition to `Red` and `Green`.
 - Allowed transitions per light: `Green -> Orange -> Red`, and `Red -> Green` only.
+- `Red -> Orange` is invalid and must never occur.
 - The `Orange` state is always held for a fixed time period: **2 seconds**.
+- Minimum green lock: once a light turns green, it remains green for at least **3 seconds** unless safety would be violated.
 - **Crossing-light safety rule**: A light cannot transition to `Green` if the other route is still active (has any light in `Green` or `Orange` state).
   - North/South are the same route; East/West are the same route.
   - To switch from NS to EW (or vice versa), all lights of the moving-from route must first reach `Red`.
@@ -85,6 +87,45 @@ crossroads/
 4. Complete crossing vehicles (based on density-scaled duration)
 5. Advance light controller
 6. Validate state with SafetyChecker (count violations)
+
+## Scheduler Contract (Route-based)
+
+**Goal:** groen als het kan, rood als het moet; maximale doorstroming zonder starvation.
+
+### 1) Route conflict matrix is source of truth
+- Build a fixed conflict matrix per route (`from_lane + movement`).
+- Conflict matrix determines which routes must be red before a target route can become green.
+- Policy: when one lane in a route-family conflicts, the full conflicting route-family is blocked.
+
+### 2) Anchor route + optional parallel activation
+- Scheduler selects one anchor route by priority (queue pressure + wait aging).
+- Conflicting routes are moved to red first.
+- Non-conflicting routes are **left untouched** (not forced green, not forced red).
+- Optional optimization: if additional routes can safely go green in parallel with the anchor, activate them in the same cycle.
+
+### 3) Fairness and starvation guarantees
+- Per-route adaptive priority with bounded-wait guarantee.
+- Hard anti-starvation bound: `Wmax = 20s` under sustained demand.
+- Scheduler balances throughput and fairness; no route with sustained demand may remain permanently red.
+
+### 4) Transition and phase discipline
+- Transition order per light remains: `Green -> Orange -> Red -> Green`.
+- Never perform `Red -> Orange`.
+- Replanning occurs at controlled decision moments to avoid oscillation/flapping.
+
+### 5) SafetyChecker role
+- Scheduler performs primary route selection and conflict handling.
+- `SafetyChecker` remains the **final guardrail** for state/transition validity.
+- SafetyChecker does not define route priority and does not mutate layout/routing semantics.
+
+### 6) Runtime observability
+- Expose conflict matrix and scheduler decisions in snapshot/debug data.
+- UI must show a dedicated debug section with:
+  - route -> conflicting routes,
+  - active anchor route,
+  - parallel activated routes,
+  - blocked-by-safety reasons,
+  - current wait/priority indicators.
 
 **Key Methods:**
 - `simulate(duration, dt)`: Run full simulation

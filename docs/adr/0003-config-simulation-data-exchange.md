@@ -19,6 +19,22 @@ We hanteren een expliciet uitwisselingscontract:
 - Domeinfouten (onveilige combinaties) geven `400` met foutdetails.
 - Simulatie blijft doordraaien met laatste geldige configuratie bij apply-fout.
 
+## Uitbreiding contract voor scheduler + conflictmatrix
+- Snapshot/debug-data bevat conflictmatrix-informatie op routeniveau.
+- Snapshot/debug-data bevat schedulerstatus:
+	- actieve anchor route,
+	- parallel geactiveerde routes,
+	- geblokkeerde routes + reden,
+	- fairness-indicatoren (wachttijd/aging),
+	- route-prioriteitsscore en teller van voertuigen gestart in huidige groenfase.
+- Config-validatie weigert onvolledige of intern inconsistente conflictmatrixafleidingen.
+- Fairness-SLA (`Wmax`) en timingparameters (`minimum_green_seconds`) worden expliciet geversioneerd in contract.
+- `max_green_seconds` fungeert als conflict-gebonden fallback (`8s`): alleen afdwingbaar wanneer conflicterende routes daadwerkelijk wachten.
+
+## Safety in uitwisselingslaag
+- Planner kan routes voorstellen, maar effectieve activatie blijft onder safety-validatie.
+- Ongeldige transities (`Rood -> Oranje`) worden als domeinfout afgewezen.
+
 ## Consequenties
 - Positief: veiligere runtime updates van kruispuntconfiguraties.
 - Positief: basis voor toekomstige externe clients/websocket-sync.

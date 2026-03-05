@@ -15,6 +15,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nlohmann_json)
 
 find_package(SQLite3 QUIET)
+find_package(PkgConfig QUIET)
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
@@ -32,6 +33,15 @@ target_link_libraries(crossroads PRIVATE nlohmann_json::nlohmann_json)
 if(SQLite3_FOUND)
     target_link_libraries(crossroads PRIVATE SQLite::SQLite3)
     target_compile_definitions(crossroads PRIVATE CROSSROADS_USE_SQLITE=1)
+elseif(PkgConfig_FOUND)
+    pkg_check_modules(SQLITE3_PKG QUIET sqlite3)
+    if(SQLITE3_PKG_FOUND)
+        target_include_directories(crossroads PRIVATE ${SQLITE3_PKG_INCLUDE_DIRS})
+        target_link_libraries(crossroads PRIVATE ${SQLITE3_PKG_LIBRARIES})
+        target_compile_definitions(crossroads PRIVATE CROSSROADS_USE_SQLITE=1)
+    else()
+        message(WARNING "SQLite3 dev package not found. Falling back to file-backed config persistence.")
+    endif()
 else()
     message(WARNING "SQLite3 dev package not found. Falling back to file-backed config persistence.")
 endif()
