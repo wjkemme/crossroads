@@ -131,10 +131,12 @@
                             <th>Demand</th>
                             <th>Wait (s)</th>
                             <th>Score</th>
+                            <th>Raw</th>
                             <th>Green</th>
                             <th>Selected</th>
                             <th>Parallel</th>
                             <th>Blocked</th>
+                            <th>Clear (s)</th>
                             <th>Started</th>
                             <th>Reason</th>
                             <th>Conflicts</th>
@@ -2429,15 +2431,20 @@
                 const conflicts = Array.isArray(route.conflicts) ? route.conflicts.join(', ') : '';
                 const wait = Number(route.wait_seconds || 0);
                 const score = Number(route.priority_score || 0);
+                const scoreRaw = Number(route.priority_score_raw || 0);
+                const clearanceWait = Number(route.clearance_wait_seconds || 0);
+                const isBlocked = !!(route.blocked_by_anchor || route.blocked_by_safety || route.blocked_by_clearance);
                 return `<tr>
                     <td>${route.route || '-'}</td>
                     <td>${route.waiting_demand ? 'Y' : 'N'}</td>
                     <td>${Number.isFinite(wait) ? wait.toFixed(1) : '0.0'}</td>
                     <td>${Number.isFinite(score) ? score.toFixed(1) : '0.0'}</td>
+                    <td>${Number.isFinite(scoreRaw) ? scoreRaw.toFixed(1) : '0.0'}</td>
                     <td>${route.green_active ? 'Y' : 'N'}</td>
                     <td>${route.selected ? 'Y' : 'N'}</td>
                     <td>${route.parallel_active ? 'Y' : 'N'}</td>
-                    <td>${route.blocked_by_anchor ? 'Y' : 'N'}</td>
+                    <td>${isBlocked ? 'Y' : 'N'}</td>
+                    <td>${Number.isFinite(clearanceWait) ? clearanceWait.toFixed(1) : '0.0'}</td>
                     <td>${Number.isFinite(Number(route.vehicles_started_this_green)) ? Number(route.vehicles_started_this_green) : 0}</td>
                     <td>${route.activation_reason || '-'}</td>
                     <td>${conflicts || '-'}</td>
