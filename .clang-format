@@ -76,8 +76,8 @@ AlignTrailingComments: true
 ReflowComments: true            # Lange comments worden netjes herschikt
 
 # -------- Struct, class & initializer lists --------
-AlignConsecutiveAssignments: true
-AlignConsecutiveDeclarations: true
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
 AlignEscapedNewlines: Left      # Escape-newlines links uitlijnen
 BinPackArguments: false          # Geen compacte argument packing
 BinPackParameters: false

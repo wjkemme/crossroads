@@ -1,95 +1,78 @@
 #pragma once
 
-#include "Intersection.hpp"
-#include "BasicLightController.hpp"
-#include "IntersectionConfig.hpp"
-
 #include <algorithm>
 #include <array>
 #include <unordered_map>
 #include <vector>
 
-namespace crossroads
-{
-    class ITrafficLightController
-    {
-    public:
+#include "BasicLightController.hpp"
+#include "Intersection.hpp"
+#include "IntersectionConfig.hpp"
+
+namespace crossroads {
+    class ITrafficLightController {
+       public:
         virtual ~ITrafficLightController() = default;
         virtual void tick(double dt_seconds) = 0;
         virtual IntersectionState getCurrentState() const = 0;
         virtual void reset() = 0;
-        virtual void setDemandByDirection(const std::array<bool, 4> &)
-        {
+        virtual void setDemandByDirection(const std::array<bool, 4>&) {
         }
     };
 
-    class BasicControllerAdapter : public ITrafficLightController
-    {
-    public:
+    class BasicControllerAdapter : public ITrafficLightController {
+       public:
         BasicControllerAdapter(double ns_green_duration, double ew_green_duration)
-            : basic_controller(ns_green_duration, ew_green_duration)
-        {
+            : basic_controller(ns_green_duration, ew_green_duration) {
         }
 
-        void tick(double dt_seconds) override
-        {
+        void tick(double dt_seconds) override {
             basic_controller.tick(dt_seconds);
         }
 
-        IntersectionState getCurrentState() const override
-        {
+        IntersectionState getCurrentState() const override {
             return basic_controller.getCurrentState();
         }
 
-        void reset() override
-        {
+        void reset() override {
             basic_controller.reset();
         }
 
-        void setDemandByDirection(const std::array<bool, 4> &demand) override
-        {
+        void setDemandByDirection(const std::array<bool, 4>& demand) override {
             basic_controller.setDemandByDirection(demand);
         }
 
-    private:
+       private:
         BasicLightController basic_controller;
     };
 
-    class NullControlController : public ITrafficLightController
-    {
-    public:
-        NullControlController()
-            : elapsed(0.0), orange_on(true)
-        {
+    class NullControlController : public ITrafficLightController {
+       public:
+        NullControlController() : elapsed(0.0), orange_on(true) {
             reset();
         }
 
-        void tick(double dt_seconds) override
-        {
+        void tick(double dt_seconds) override {
             elapsed += dt_seconds;
-            while (elapsed >= 1.0)
-            {
+            while (elapsed >= 1.0) {
                 elapsed -= 1.0;
                 orange_on = !orange_on;
                 applyPattern();
             }
         }
 
-        IntersectionState getCurrentState() const override
-        {
+        IntersectionState getCurrentState() const override {
             return state;
         }
 
-        void reset() override
-        {
+        void reset() override {
             elapsed = 0.0;
             orange_on = true;
             applyPattern();
         }
 
-    private:
-        void applyPattern()
-        {
+       private:
+        void applyPattern() {
             LightState active = orange_on ? LightState::Orange : LightState::Red;
             state.north = active;
             state.south = active;
@@ -110,49 +93,38 @@ namespace crossroads
         bool orange_on;
     };
 
-    class ConfigurableSignalGroupController : public ITrafficLightController
-    {
-    public:
-        explicit ConfigurableSignalGroupController(const IntersectionConfig &config)
-            : intersection_config(config), phase_index(0), in_orange(false), phase_elapsed(0.0)
-        {
-            for (const auto &group : intersection_config.signal_groups)
-            {
+    class ConfigurableSignalGroupController : public ITrafficLightController {
+       public:
+        explicit ConfigurableSignalGroupController(const IntersectionConfig& config)
+            : intersection_config(config), phase_index(0), in_orange(false), phase_elapsed(0.0) {
+            for (const auto& group : intersection_config.signal_groups) {
                 phase_order.push_back(group.id);
             }
             rebuildLaneApproachMap();
             reset();
         }
 
-        void tick(double dt_seconds) override
-        {
-            if (phase_order.empty())
-            {
+        void tick(double dt_seconds) override {
+            if (phase_order.empty()) {
                 return;
             }
 
             phase_elapsed += dt_seconds;
-            while (true)
-            {
-                const SignalGroupConfig *group = currentGroup();
-                if (!group)
-                {
+            while (true) {
+                const SignalGroupConfig* group = currentGroup();
+                if (!group) {
                     return;
                 }
 
                 double phase_duration = in_orange ? group->orange_seconds : group->min_green_seconds;
-                if (phase_elapsed < phase_duration)
-                {
+                if (phase_elapsed < phase_duration) {
                     break;
                 }
 
                 phase_elapsed -= phase_duration;
-                if (!in_orange)
-                {
+                if (!in_orange) {
                     in_orange = true;
-                }
-                else
-                {
+                } else {
                     in_orange = false;
                     phase_index = (phase_index + 1) % phase_order.size();
                 }
@@ -160,124 +132,105 @@ namespace crossroads
             }
         }
 
-        IntersectionState getCurrentState() const override
-        {
+        IntersectionState getCurrentState() const override {
             return state;
         }
 
-        void reset() override
-        {
+        void reset() override {
             phase_index = 0;
             in_orange = false;
             phase_elapsed = 0.0;
             applyCurrentPhase();
         }
 
-    private:
-        void rebuildLaneApproachMap()
-        {
+       private:
+        void rebuildLaneApproachMap() {
             lane_to_approach.clear();
-            for (const auto &approach : intersection_config.approaches)
-            {
-                for (const auto &lane : approach.lanes)
-                {
+            for (const auto& approach : intersection_config.approaches) {
+                for (const auto& lane : approach.lanes) {
                     lane_to_approach[lane.id] = approach.id;
                 }
             }
         }
 
-        const SignalGroupConfig *currentGroup() const
-        {
-            if (phase_order.empty())
-            {
+        const SignalGroupConfig* currentGroup() const {
+            if (phase_order.empty()) {
                 return nullptr;
             }
 
             SignalGroupId id = phase_order[phase_index];
             auto it = std::find_if(intersection_config.signal_groups.begin(),
                                    intersection_config.signal_groups.end(),
-                                   [id](const SignalGroupConfig &group)
-                                   { return group.id == id; });
+                                   [id](const SignalGroupConfig& group) { return group.id == id; });
             return it == intersection_config.signal_groups.end() ? nullptr : &(*it);
         }
 
-        static void applyMovement(IntersectionState &s, ApproachId approach, MovementType movement, LightState color)
-        {
-            if (movement == MovementType::Right)
-            {
-                switch (approach)
-                {
-                case ApproachId::North:
-                    s.turnNorthWest = color;
-                    return;
-                case ApproachId::East:
-                    s.turnEastNorth = color;
-                    return;
-                case ApproachId::South:
-                    s.turnSouthEast = color;
-                    return;
-                case ApproachId::West:
-                    s.turnWestSouth = color;
-                    return;
+        static void applyMovement(IntersectionState& s, ApproachId approach, MovementType movement, LightState color) {
+            if (movement == MovementType::Right) {
+                switch (approach) {
+                    case ApproachId::North:
+                        s.turnNorthWest = color;
+                        return;
+                    case ApproachId::East:
+                        s.turnEastNorth = color;
+                        return;
+                    case ApproachId::South:
+                        s.turnSouthEast = color;
+                        return;
+                    case ApproachId::West:
+                        s.turnWestSouth = color;
+                        return;
                 }
             }
 
-            if (movement == MovementType::Left)
-            {
-                switch (approach)
-                {
-                case ApproachId::North:
-                    s.turnNorthEast = color;
-                    return;
-                case ApproachId::East:
-                    s.turnEastSouth = color;
-                    return;
-                case ApproachId::South:
-                    s.turnSouthWest = color;
-                    return;
-                case ApproachId::West:
-                    s.turnWestNorth = color;
-                    return;
+            if (movement == MovementType::Left) {
+                switch (approach) {
+                    case ApproachId::North:
+                        s.turnNorthEast = color;
+                        return;
+                    case ApproachId::East:
+                        s.turnEastSouth = color;
+                        return;
+                    case ApproachId::South:
+                        s.turnSouthWest = color;
+                        return;
+                    case ApproachId::West:
+                        s.turnWestNorth = color;
+                        return;
                 }
             }
 
-            switch (approach)
-            {
-            case ApproachId::North:
-                s.north = color;
-                break;
-            case ApproachId::East:
-                s.east = color;
-                break;
-            case ApproachId::South:
-                s.south = color;
-                break;
-            case ApproachId::West:
-                s.west = color;
-                break;
+            switch (approach) {
+                case ApproachId::North:
+                    s.north = color;
+                    break;
+                case ApproachId::East:
+                    s.east = color;
+                    break;
+                case ApproachId::South:
+                    s.south = color;
+                    break;
+                case ApproachId::West:
+                    s.west = color;
+                    break;
             }
         }
 
-        void applyCurrentPhase()
-        {
+        void applyCurrentPhase() {
             state = IntersectionState{};
-            const SignalGroupConfig *group = currentGroup();
-            if (!group)
-            {
+            const SignalGroupConfig* group = currentGroup();
+            if (!group) {
                 return;
             }
 
             LightState color = in_orange ? LightState::Orange : LightState::Green;
-            for (LaneId lane_id : group->controlled_lanes)
-            {
+            for (LaneId lane_id : group->controlled_lanes) {
                 auto approach_it = lane_to_approach.find(lane_id);
-                if (approach_it == lane_to_approach.end())
-                {
+                if (approach_it == lane_to_approach.end()) {
                     continue;
                 }
 
-                for (MovementType movement : group->green_movements)
-                {
+                for (MovementType movement : group->green_movements) {
                     applyMovement(state, approach_it->second, movement, color);
                 }
             }
@@ -291,4 +244,4 @@ namespace crossroads
         double phase_elapsed;
         IntersectionState state{};
     };
-}
+}  // namespace crossroads

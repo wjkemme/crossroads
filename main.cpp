@@ -1,7 +1,6 @@
 #include <iostream>
 
-int main()
-{
+int main() {
     std::cout << "Welcome to Crossroads!" << std::endl;
     return 0;
 }

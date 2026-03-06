@@ -1,17 +1,10 @@
 #pragma once
 
-namespace crossroads
-{
+namespace crossroads {
 
-    enum class LightState
-    {
-        Red,
-        Orange,
-        Green
-    };
+    enum class LightState { Red, Orange, Green };
 
-    struct IntersectionState
-    {
+    struct IntersectionState {
         // Main direction lights: Order: North, East, South, West
         LightState north{LightState::Red};
         LightState east{LightState::Red};
@@ -19,16 +12,16 @@ namespace crossroads
         LightState west{LightState::Red};
 
         // Turning lights (direction A -> direction B)
-        LightState turnSouthEast{LightState::Red}; // South -> East (enabled if West is Red)
-        LightState turnNorthWest{LightState::Red}; // North -> West (enabled if East is Red)
-        LightState turnWestSouth{LightState::Red}; // West -> South (enabled if North is Red)
-        LightState turnEastNorth{LightState::Red}; // East -> North (enabled if South is Red)
+        LightState turnSouthEast{LightState::Red};  // South -> East (enabled if West is Red)
+        LightState turnNorthWest{LightState::Red};  // North -> West (enabled if East is Red)
+        LightState turnWestSouth{LightState::Red};  // West -> South (enabled if North is Red)
+        LightState turnEastNorth{LightState::Red};  // East -> North (enabled if South is Red)
 
         // Dedicated left-turn lights (direction A -> direction B)
-        LightState turnNorthEast{LightState::Red}; // North -> East
-        LightState turnSouthWest{LightState::Red}; // South -> West
-        LightState turnEastSouth{LightState::Red}; // East -> South
-        LightState turnWestNorth{LightState::Red}; // West -> North
+        LightState turnNorthEast{LightState::Red};  // North -> East
+        LightState turnSouthWest{LightState::Red};  // South -> West
+        LightState turnEastSouth{LightState::Red};  // East -> South
+        LightState turnWestNorth{LightState::Red};  // West -> North
     };
 
-} // namespace crossroads
+}  // namespace crossroads

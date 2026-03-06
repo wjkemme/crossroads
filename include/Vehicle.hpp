@@ -9,21 +9,21 @@ namespace crossroads {
     enum class Direction { North = 0, South = 1, East = 2, West = 3 };
 
     struct Vehicle {
-        uint32_t     id;
-        Direction    entry_lane;
-        double       arrival_time;
-        double       crossing_time;
-        double       exit_time;
-        double       current_speed;     // m/s, range [0, 10]
-        double       position_in_lane;  // meters from queue start
-        bool         turning;           // true when vehicle uses turn lane
-        uint8_t      queue_index;       // 0 or 1 for straight lanes, 2 for turn lane
-        LaneId       lane_id;           // future-proof configurable lane id
-        MovementType movement;          // planned movement for configurable routing
-        ApproachId   destination_approach;
-        uint16_t     destination_lane_index;
-        LaneId       destination_lane_id;
-        bool         lane_change_allowed;
+        uint32_t id;
+        Direction entry_lane;
+        double arrival_time;
+        double crossing_time;
+        double exit_time;
+        double current_speed;     // m/s, range [0, 10]
+        double position_in_lane;  // meters from queue start
+        bool turning;             // true when vehicle uses turn lane
+        uint8_t queue_index;      // 0 or 1 for straight lanes, 2 for turn lane
+        LaneId lane_id;           // future-proof configurable lane id
+        MovementType movement;    // planned movement for configurable routing
+        ApproachId destination_approach;
+        uint16_t destination_lane_index;
+        LaneId destination_lane_id;
+        bool lane_change_allowed;
 
         Vehicle(uint32_t vid, Direction lane, double arrival)
             : id(vid)
@@ -67,9 +67,9 @@ namespace crossroads {
 
         void updateSpeed(double target_speed, double dt_seconds) {
             const double ACCEL = 3.0;  // m/s² - realistic car acceleration
-            target_speed       = std::max(0.0, std::min(10.0, target_speed));
+            target_speed = std::max(0.0, std::min(10.0, target_speed));
 
-            double delta      = target_speed - current_speed;
+            double delta = target_speed - current_speed;
             double max_change = ACCEL * dt_seconds;
 
             if (std::abs(delta) <= max_change)
@@ -81,9 +81,9 @@ namespace crossroads {
         }
 
         double getCrossingDuration(size_t queue_length) const {
-            double           density                = std::min(1.0, queue_length / 10.0);
-            double           base                   = 2.2 + (density * 1.6);  // 2.2-3.8 sec range
-            constexpr double kCrossingDurationScale = 0.85;                   // ~15% faster crossing through junction
+            double density = std::min(1.0, queue_length / 10.0);
+            double base = 2.2 + (density * 1.6);             // 2.2-3.8 sec range
+            constexpr double kCrossingDurationScale = 0.85;  // ~15% faster crossing through junction
             // Turning vehicles travel longer arc path, need more time
             return turning ? base * 1.3 * kCrossingDurationScale : base * kCrossingDurationScale;
         }

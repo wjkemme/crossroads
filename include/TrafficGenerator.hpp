@@ -1,23 +1,22 @@
 #pragma once
 
-#include <vector>
-#include <deque>
-#include <cstdint>
 #include <array>
-#include <optional>
+#include <cstdint>
+#include <deque>
 #include <functional>
-#include "Vehicle.hpp"
+#include <optional>
+#include <vector>
+
 #include "Intersection.hpp"
 #include "IntersectionConfig.hpp"
+#include "Vehicle.hpp"
 
 // Add these constants after the class declaration begins:
-static constexpr double VEHICLE_SPACING = 5.0; // meters
-static constexpr size_t LANE_CAPACITY = 10;    // vehicles
-namespace crossroads
-{
+static constexpr double VEHICLE_SPACING = 5.0;  // meters
+static constexpr size_t LANE_CAPACITY = 10;     // vehicles
+namespace crossroads {
 
-    struct LaneVehicleState
-    {
+    struct LaneVehicleState {
         uint32_t id = 0;
         double position_in_lane = 0.0;
         double speed = 0.0;
@@ -25,7 +24,7 @@ namespace crossroads
         bool turning = false;
         double crossing_time = -1.0;
         double crossing_duration = 0.0;
-        uint8_t queue_index = 0; // 0 or 1 for straight, 2 for turn
+        uint8_t queue_index = 0;  // 0 or 1 for straight, 2 for turn
         uint16_t lane_id = 0;
         MovementType movement = MovementType::Straight;
         ApproachId destination_approach = ApproachId::North;
@@ -34,17 +33,15 @@ namespace crossroads
         bool lane_change_allowed = true;
     };
 
-    class TrafficGenerator
-    {
-    public:
-        struct SpawnLaneFilter
-        {
+    class TrafficGenerator {
+       public:
+        struct SpawnLaneFilter {
             ApproachId approach = ApproachId::North;
             uint16_t lane_index = 0;
         };
 
-        TrafficGenerator(double arrival_rate = 0.5); // vehicles per second, per lane
-        TrafficGenerator(const IntersectionConfig &config, double arrival_rate = 0.5);
+        TrafficGenerator(double arrival_rate = 0.5);  // vehicles per second, per lane
+        TrafficGenerator(const IntersectionConfig& config, double arrival_rate = 0.5);
 
         // Generate new vehicles for given time step and add them to appropriate lane queues
         void generateTraffic(double dt_seconds, double current_time);
@@ -62,13 +59,17 @@ namespace crossroads
         size_t getTotalWaiting() const;
 
         // Get the first waiting vehicle in a lane (or nullptr if none)
-        Vehicle *peekNextVehicle(Direction lane);
+        Vehicle* peekNextVehicle(Direction lane);
 
         // Statistics: total vehicles generated (successfully spawned)
-        uint32_t getTotalGenerated() const { return total_generated; }
+        uint32_t getTotalGenerated() const {
+            return total_generated;
+        }
 
         // Statistics: total vehicles that have crossed
-        uint32_t getTotalCrossed() const { return crossed_vehicles.size(); }
+        uint32_t getTotalCrossed() const {
+            return crossed_vehicles.size();
+        }
 
         // Statistics: average wait time for crossed vehicles
         double getAverageWaitTime() const;
@@ -77,38 +78,47 @@ namespace crossroads
         void reset();
 
         void updateVehicleSpeeds(double dt_seconds,
-                                 const std::array<bool, 4> &lane_can_move,
-                                 const std::function<bool(Direction, const Vehicle &)> &can_vehicle_move_override = {});
+                                 const std::array<bool, 4>& lane_can_move,
+                                 const std::function<bool(Direction, const Vehicle&)>& can_vehicle_move_override = {});
         double getAverageQueueDensity(Direction dir) const;
         std::vector<LaneVehicleState> getLaneVehicleStates(Direction dir) const;
-        void setSpawnLaneFilter(const std::optional<SpawnLaneFilter> &filter);
+        void setSpawnLaneFilter(const std::optional<SpawnLaneFilter>& filter);
         std::optional<SpawnLaneFilter> getSpawnLaneFilter() const;
         void setArrivalRate(double rate);
         double getArrivalRate() const;
 
         // Get queue reference by direction (for direct iteration)
-        std::deque<Vehicle> &getQueueByDirection(Direction dir);
-        const std::deque<Vehicle> &getQueueByDirection(Direction dir) const;
+        std::deque<Vehicle>& getQueueByDirection(Direction dir);
+        const std::deque<Vehicle>& getQueueByDirection(Direction dir) const;
 
-    private:
-        const ApproachConfig *getApproachConfig(Direction dir) const;
-        bool laneAllowsMovement(const LaneConfig &lane, MovementType movement) const;
-        const LaneConnectionConfig *findLaneConnection(ApproachId from_approach, uint16_t from_lane_index, MovementType movement) const;
-        bool resolveVehicleRoute(Vehicle &vehicle, ApproachId from_approach, uint16_t from_lane_index, MovementType movement) const;
+       private:
+        const ApproachConfig* getApproachConfig(Direction dir) const;
+        bool laneAllowsMovement(const LaneConfig& lane, MovementType movement) const;
+        const LaneConnectionConfig* findLaneConnection(ApproachId from_approach,
+                                                       uint16_t from_lane_index,
+                                                       MovementType movement) const;
+        bool resolveVehicleRoute(Vehicle& vehicle,
+                                 ApproachId from_approach,
+                                 uint16_t from_lane_index,
+                                 MovementType movement) const;
         void enforceSpawnLaneFilterOnExistingQueues();
-        size_t chooseSpawnMovementIndex(const std::vector<MovementType> &movements, uint32_t vehicle_id) const;
-        size_t choosePreferredLaneIndex(const ApproachConfig &approach, MovementType movement, size_t current_index) const;
-        void maybeApplyLaneChanges(Direction dir, std::deque<Vehicle> &queue);
-        bool hasSafeGapForLaneChange(const std::deque<Vehicle> &queue, size_t vehicle_index, LaneId target_lane_id) const;
+        size_t chooseSpawnMovementIndex(const std::vector<MovementType>& movements, uint32_t vehicle_id) const;
+        size_t choosePreferredLaneIndex(const ApproachConfig& approach,
+                                        MovementType movement,
+                                        size_t current_index) const;
+        void maybeApplyLaneChanges(Direction dir, std::deque<Vehicle>& queue);
+        bool hasSafeGapForLaneChange(const std::deque<Vehicle>& queue,
+                                     size_t vehicle_index,
+                                     LaneId target_lane_id) const;
 
         IntersectionConfig intersection_config;
         bool use_configured_spawns = false;
         std::array<size_t, 4> spawn_lane_cursor{};
         std::optional<SpawnLaneFilter> spawn_lane_filter;
 
-        double arrival_rate;      // vehicles per second per lane
-        double time_accumulated;  // accumulated time for next spawn calculation
-        uint32_t next_vehicle_id; // counter for unique IDs
+        double arrival_rate;       // vehicles per second per lane
+        double time_accumulated;   // accumulated time for next spawn calculation
+        uint32_t next_vehicle_id;  // counter for unique IDs
         uint32_t total_generated = 0;
 
         // Vehicle queues for each direction
@@ -124,4 +134,4 @@ namespace crossroads
         double getNextSpawnInterval();
     };
 
-} // namespace crossroads
+}  // namespace crossroads
