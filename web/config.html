@@ -27,14 +27,9 @@
         </div>
 
         <div class="card">
-            <div class="graph-wrap">
-                <div class="graph-title">Graphical intersection editor</div>
-                <div class="small">Lane indexing: 0 = inner lane, higher index = outward.</div>
-                <div id="graphBoard" class="graph-board"></div>
-            </div>
             <div class="route-wrap">
                 <div class="graph-title">Configured routes through intersection</div>
-                <svg id="routeMap" class="route-map" viewBox="0 0 640 360" role="img"
+                <svg id="routeMap" class="route-map" viewBox="0 0 640 520" role="img"
                     aria-label="Configured route schematic"></svg>
             </div>
             <div id="approaches" class="grid"></div>
@@ -334,6 +329,11 @@
         function setBanner(msg, kind) {
             bannerEl.textContent = msg;
             bannerEl.className = 'banner ' + (kind || '');
+        }
+
+        function clearBanner() {
+            bannerEl.textContent = '';
+            bannerEl.className = 'banner';
         }
 
         function setStatus(msg, kind) {
@@ -1037,42 +1037,42 @@
         }
 
         function routeLanePoints(approachId, laneIndex, type) {
-            const spacing = 10;
+            const spacing = 15;
             const idx = Math.max(0, Number(laneIndex) || 0);
             const fromBandStart = 280;
             const toBandStart = 340;
-            const westTopBand = 140;
-            const westBottomBand = 200;
+            const westTopBand = 220;
+            const westBottomBand = 280;
 
             if (approachId === 'north') {
                 if (type === 'from') {
                     const x = (fromBandStart + 20) - idx * spacing;
-                    return { outer: { x, y: 20 }, inner: { x, y: 126 } };
+                    return { outer: { x, y: 35 }, inner: { x, y: 170 } };
                 }
-                return { outer: { x: toBandStart + idx * spacing, y: 20 }, inner: { x: toBandStart + idx * spacing, y: 126 } };
+                return { outer: { x: toBandStart + idx * spacing, y: 35 }, inner: { x: toBandStart + idx * spacing, y: 170 } };
             }
 
             if (approachId === 'south') {
                 if (type === 'from') {
-                    return { outer: { x: toBandStart + idx * spacing, y: 340 }, inner: { x: toBandStart + idx * spacing, y: 234 } };
+                    return { outer: { x: toBandStart + idx * spacing, y: 485 }, inner: { x: toBandStart + idx * spacing, y: 350 } };
                 }
                 const x = (fromBandStart + 20) - idx * spacing;
-                return { outer: { x, y: 340 }, inner: { x, y: 234 } };
+                return { outer: { x, y: 485 }, inner: { x, y: 350 } };
             }
 
             if (approachId === 'west') {
                 if (type === 'from') {
-                    return { outer: { x: 20, y: westBottomBand + idx * spacing }, inner: { x: 266, y: westBottomBand + idx * spacing } };
+                    return { outer: { x: 35, y: westBottomBand + idx * spacing }, inner: { x: 230, y: westBottomBand + idx * spacing } };
                 }
                 const y = (westTopBand + 20) - idx * spacing;
-                return { outer: { x: 20, y }, inner: { x: 266, y } };
+                return { outer: { x: 35, y }, inner: { x: 230, y } };
             }
 
             if (type === 'from') {
                 const y = (westTopBand + 20) - idx * spacing;
-                return { outer: { x: 620, y }, inner: { x: 374, y } };
+                return { outer: { x: 605, y }, inner: { x: 410, y } };
             }
-            return { outer: { x: 620, y: westBottomBand + idx * spacing }, inner: { x: 374, y: westBottomBand + idx * spacing } };
+            return { outer: { x: 605, y: westBottomBand + idx * spacing }, inner: { x: 410, y: westBottomBand + idx * spacing } };
         }
 
         function createSvgEl(tag, attrs = {}) {
@@ -1101,11 +1101,11 @@
             routeMapEl.appendChild(defs);
 
             routeMapEl.appendChild(createSvgEl('rect', {
-                x: 266,
-                y: 126,
-                width: 108,
-                height: 108,
-                rx: 8,
+                x: 230,
+                y: 170,
+                width: 180,
+                height: 180,
+                rx: 10,
                 fill: 'rgba(30,41,59,0.45)',
                 stroke: '#334155',
                 'stroke-dasharray': '4 3'
@@ -1146,12 +1146,14 @@
             }
 
             const labels = [
-                { x: 320, y: 14, text: `${fromLabel('north')} / ${toLabel('north')}`, anchor: 'middle' },
-                { x: 320, y: 356, text: `${toLabel('south')} / ${fromLabel('south')}`, anchor: 'middle' },
-                { x: 8, y: 124, text: `${toLabel('west')}`, anchor: 'start' },
-                { x: 8, y: 246, text: `${fromLabel('west')}`, anchor: 'start' },
-                { x: 632, y: 124, text: `${fromLabel('east')}`, anchor: 'end' },
-                { x: 632, y: 246, text: `${toLabel('east')}`, anchor: 'end' }
+                { x: 230, y: 18, text: `${fromLabel('north')}`, anchor: 'middle' },
+                { x: 410, y: 18, text: `${toLabel('north')}`, anchor: 'middle' },
+                { x: 230, y: 510, text: `${toLabel('south')}`, anchor: 'middle' },
+                { x: 410, y: 510, text: `${fromLabel('south')}`, anchor: 'middle' },
+                { x: 8, y: 200, text: `${toLabel('west')}`, anchor: 'start' },
+                { x: 8, y: 320, text: `${fromLabel('west')}`, anchor: 'start' },
+                { x: 632, y: 200, text: `${fromLabel('east')}`, anchor: 'end' },
+                { x: 632, y: 320, text: `${toLabel('east')}`, anchor: 'end' }
             ];
 
             for (const info of labels) {
@@ -1187,8 +1189,13 @@
                         opacity: 0.98
                     });
                 } else {
+                    const mx = (from.x + to.x) / 2;
+                    const my = (from.y + to.y) / 2;
+                    const pull = connection.movement === 'right' ? 0.4 : 1.2;
+                    const cx = mx + (320 - mx) * pull;
+                    const cy = my + (260 - my) * pull;
                     routeEl = createSvgEl('path', {
-                        d: `M ${from.x} ${from.y} Q 320 180 ${to.x} ${to.y}`,
+                        d: `M ${from.x} ${from.y} Q ${cx} ${cy} ${to.x} ${to.y}`,
                         fill: 'none',
                         stroke: color,
                         'stroke-width': 2.6,
@@ -1245,6 +1252,7 @@
         }
 
         function renderGraph() {
+            if (!graphBoardEl) { renderRouteMap(); return; }
             graphBoardEl.innerHTML = '';
 
             const center = document.createElement('div');
@@ -1456,7 +1464,7 @@
 
                 const left = document.createElement('div');
                 left.className = 'approach-title';
-                left.textContent = fromLabel(approach.id);
+                left.textContent = approachWord(approach.id);
 
                 const right = document.createElement('input');
                 right.type = 'text';
@@ -1471,6 +1479,11 @@
                 head.appendChild(left);
                 head.appendChild(right);
                 card.appendChild(head);
+
+                const fromHeader = document.createElement('div');
+                fromHeader.className = 'section-header';
+                fromHeader.textContent = `${fromLabel(approach.id)} (${approach.lanes.length} ${approach.lanes.length === 1 ? 'lane' : 'lanes'})`;
+                card.appendChild(fromHeader);
 
                 const laneList = document.createElement('div');
                 laneList.className = 'lane-list';
@@ -1649,27 +1662,10 @@
 
                 card.appendChild(laneList);
 
-                const actions = document.createElement('div');
-                actions.className = 'row';
-                actions.style.marginTop = '8px';
-                actions.style.marginBottom = '0';
-
-                const toLaneLabel = document.createElement('label');
-                toLaneLabel.textContent = `${toLabel(approach.id)} lanes:`;
-                const toLaneInput = document.createElement('input');
-                toLaneInput.type = 'number';
-                toLaneInput.min = '1';
-                toLaneInput.max = '64';
-                toLaneInput.value = String(toLaneCountForApproach(approach));
-                toLaneInput.style.width = '96px';
-                toLaneInput.oninput = (e) => {
-                    const raw = Number(e.target.value);
-                    const nextCount = Number.isFinite(raw) ? Math.max(1, Math.min(64, Math.floor(raw))) : 1;
-                    state.approaches[aIdx].to_lane_count = nextCount;
-                    normalizeConnections();
-                    renderEditor();
-                };
-                toLaneLabel.appendChild(toLaneInput);
+                const fromActions = document.createElement('div');
+                fromActions.className = 'row';
+                fromActions.style.marginTop = '8px';
+                fromActions.style.marginBottom = '0';
 
                 const addBtn = document.createElement('button');
                 addBtn.className = 'secondary';
@@ -1684,10 +1680,64 @@
                 hint.className = 'small';
                 hint.textContent = 'Lane indices are per direction: 0 = inner lane, higher = outward.';
 
-                actions.appendChild(addBtn);
-                actions.appendChild(toLaneLabel);
-                actions.appendChild(hint);
-                card.appendChild(actions);
+                fromActions.appendChild(addBtn);
+                fromActions.appendChild(hint);
+                card.appendChild(fromActions);
+
+                const toHeader = document.createElement('div');
+                toHeader.className = 'section-header';
+                const toLaneCount = toLaneCountForApproach(approach);
+                toHeader.textContent = `${toLabel(approach.id)} (${toLaneCount} ${toLaneCount === 1 ? 'lane' : 'lanes'})`;
+                card.appendChild(toHeader);
+
+                const toActions = document.createElement('div');
+                toActions.className = 'row';
+                toActions.style.marginTop = '8px';
+                toActions.style.marginBottom = '0';
+
+                const toLaneLabel = document.createElement('label');
+                toLaneLabel.textContent = 'Number of lanes:';
+                const toLaneInput = document.createElement('input');
+                toLaneInput.type = 'number';
+                toLaneInput.min = '1';
+                toLaneInput.max = '64';
+                toLaneInput.value = String(toLaneCount);
+                toLaneInput.style.width = '96px';
+                toLaneInput.oninput = (e) => {
+                    const raw = Number(e.target.value);
+                    const nextCount = Number.isFinite(raw) ? Math.max(1, Math.min(64, Math.floor(raw))) : 1;
+                    const currentCount = toLaneCountForApproach(state.approaches[aIdx]);
+                    const approachId = state.approaches[aIdx].id;
+
+                    if (nextCount < currentCount) {
+                        const blocked = (state.lane_connections || []).filter(c =>
+                            c.to_approach === approachId && c.to_lane_index >= nextCount
+                        );
+                        if (blocked.length > 0) {
+                            const details = blocked.map(c => {
+                                const src = `${fromLabel(c.from_approach)} lane ${c.from_lane_index} (${c.movement})`;
+                                return `${src} \u2192 ${toLabel(approachId)} lane ${c.to_lane_index}`;
+                            });
+                            setBanner(
+                                `Cannot remove lane(s): ${blocked.length} connection(s) still target lane(s) that would be removed. ` +
+                                details.join('; ') +
+                                '. Remove or reassign these connections first.',
+                                'err'
+                            );
+                            e.target.value = String(currentCount);
+                            return;
+                        }
+                    }
+
+                    clearBanner();
+                    state.approaches[aIdx].to_lane_count = nextCount;
+                    normalizeConnections();
+                    renderEditor();
+                };
+                toLaneLabel.appendChild(toLaneInput);
+
+                toActions.appendChild(toLaneLabel);
+                card.appendChild(toActions);
 
                 approachesEl.appendChild(card);
             }

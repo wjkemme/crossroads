@@ -447,6 +447,18 @@ input[type="number"] {
     box-shadow: none;
 }
 
+.section-header {
+    margin-top: 14px;
+    padding: 6px 10px;
+    background: rgba(37, 99, 235, 0.12);
+    border-left: 3px solid #2563eb;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #93c5fd;
+    letter-spacing: 0.02em;
+}
+
 .route-wrap {
     margin-top: 12px;
 }
@@ -456,7 +468,7 @@ input[type="number"] {
     border: 1px solid #374151;
     border-radius: 10px;
     background: #0b1220;
-    min-height: 340px;
+    min-height: 480px;
 }
 
 .hidden {
