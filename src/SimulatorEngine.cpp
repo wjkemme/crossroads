@@ -646,6 +646,7 @@ namespace crossroads {
         route_vehicles_started_this_green.fill(0);
         route_initial_waiting_count.fill(0);
         route_crossing_vehicle_count.fill(0);
+        route_stopped_waiting_count.fill(0);
         route_conflicts_cleared_at.fill(-1.0);
         route_red_since.fill(-1.0);
         scheduler_served_this_cycle.fill(false);
@@ -1159,6 +1160,8 @@ namespace crossroads {
 
         // Count crossing vehicles per route (vehicles that started crossing but haven't exited)
         route_crossing_vehicle_count.fill(0);
+        route_stopped_waiting_count.fill(0);
+        constexpr double kStoppedSpeedThreshold = 0.2;  // m/s
         for (int approach_int = 0; approach_int < 4; ++approach_int) {
             ApproachId approach = static_cast<ApproachId>(approach_int);
             const Direction dir = directionFromApproach(approach);
@@ -1167,6 +1170,26 @@ namespace crossroads {
             auto count_crossing = [&](MovementType movement) {
                 return static_cast<int>(std::count_if(queue.begin(), queue.end(), [&](const Vehicle& vehicle) {
                     if (!vehicle.isCrossing()) {
+                        return false;
+                    }
+                    switch (movement) {
+                        case MovementType::Straight:
+                            return vehicle.movement == MovementType::Straight;
+                        case MovementType::Left:
+                            return isEffectiveLeftTurn(dir, vehicle);
+                        case MovementType::Right:
+                            return vehicle.movement == MovementType::Right;
+                    }
+                    return false;
+                }));
+            };
+
+            auto count_stopped_waiting = [&](MovementType movement) {
+                return static_cast<int>(std::count_if(queue.begin(), queue.end(), [&](const Vehicle& vehicle) {
+                    if (!vehicle.isWaiting() || vehicle.isCrossing()) {
+                        return false;
+                    }
+                    if (vehicle.current_speed > kStoppedSpeedThreshold) {
                         return false;
                     }
                     switch (movement) {
@@ -1190,6 +1213,13 @@ namespace crossroads {
                 route_crossing_vehicle_count[l_idx] = count_crossing(MovementType::Left);
             if (route_configured[r_idx])
                 route_crossing_vehicle_count[r_idx] = count_crossing(MovementType::Right);
+
+            if (route_configured[s_idx])
+                route_stopped_waiting_count[s_idx] = count_stopped_waiting(MovementType::Straight);
+            if (route_configured[l_idx])
+                route_stopped_waiting_count[l_idx] = count_stopped_waiting(MovementType::Left);
+            if (route_configured[r_idx])
+                route_stopped_waiting_count[r_idx] = count_stopped_waiting(MovementType::Right);
         }
 
         // Helper: check whether all conflicting routes have no crossing vehicles remaining
@@ -1249,6 +1279,8 @@ namespace crossroads {
         }
 
         constexpr double kCycleUnservedBonus = 15'000.0;
+        constexpr int kStoppedPriorityThreshold = 5;
+        constexpr double kStoppedPriorityBonus = 120'000.0;
 
         int anchor_route_index = -1;
         double anchor_score = -1.0;
@@ -1265,15 +1297,22 @@ namespace crossroads {
                                              ? std::max(0.0, current_time - route_last_served_time[route_idx])
                                              : movement_starvation_max_wait_seconds;
             const double demand_pressure = static_cast<double>(route.demand_count);
+            const double stopped_pressure = static_cast<double>(route_stopped_waiting_count[route_idx]);
 
             // Emphasize longer queues: aggressive weighting up to ~4x at the longest queue.
             const double queue_ratio =
                 max_waiting_demand > 0 ? demand_pressure / static_cast<double>(max_waiting_demand) : 0.0;
             const double queue_weight =
                 route_priority_queue_weight * (1.0 + 2.0 * queue_ratio + queue_ratio * queue_ratio);
+            const double stopped_bonus = queue_weight * 1.2 * stopped_pressure;
 
             double score = route_priority_wait_weight * route.wait_seconds + queue_weight * demand_pressure +
-                           route_priority_aging_weight * aging_seconds + (0.75 * route.wait_seconds * demand_pressure);
+                           route_priority_aging_weight * aging_seconds + (0.75 * route.wait_seconds * demand_pressure) +
+                           stopped_bonus;
+
+            if (stopped_pressure > static_cast<double>(kStoppedPriorityThreshold)) {
+                score += kStoppedPriorityBonus;
+            }
 
             if (!scheduler_served_this_cycle[route_idx]) {
                 score += kCycleUnservedBonus;
@@ -1923,6 +1962,7 @@ namespace crossroads {
                 out << "\"vehicles_started_this_green\":" << route_vehicles_started_this_green[idx] << ",";
                 out << "\"initial_waiting_count\":" << route_initial_waiting_count[idx] << ",";
                 out << "\"crossing_vehicle_count\":" << route_crossing_vehicle_count[idx] << ",";
+                out << "\"stopped_waiting_count\":" << route_stopped_waiting_count[idx] << ",";
                 out << "\"activation_reason\":\"" << route_activation_reason(idx) << "\",";
                 out << "\"conflicts\":[";
 
@@ -1997,6 +2037,7 @@ namespace crossroads {
         route_vehicles_started_this_green.fill(0);
         route_initial_waiting_count.fill(0);
         route_crossing_vehicle_count.fill(0);
+        route_stopped_waiting_count.fill(0);
         route_conflicts_cleared_at.fill(-1.0);
         route_red_since.fill(-1.0);
         scheduler_anchor_route_index = -1;
