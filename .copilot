@@ -50,6 +50,7 @@ crossroads/
   - North/South are the same route; East/West are the same route.
   - To switch from NS to EW (or vice versa), all lights of the moving-from route must first reach `Red`.
 - The `SafetyChecker` will validate safety invariants (no simultaneous NS and EW greens), transition validity (per-light rules and orange duration), and crossing-light constraints.
+- **Red-hold + clearance**: A route (anchor or parallel) may turn Green only if every conflicting route (a) is Red for at least **2 seconds** (post-transition state) and (b) has been free of crossing vehicles for at least **2 seconds**. Orange blocks activation.
 
 ## Turning Lights (Afslagindicatoren)
 - **4 turning lights** for safe turns at the intersection:

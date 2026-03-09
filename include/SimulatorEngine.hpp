@@ -107,6 +107,7 @@ namespace crossroads {
         std::array<int, 12> route_initial_waiting_count{};    // Waiting vehicles when green started
         std::array<int, 12> route_crossing_vehicle_count{};   // Currently crossing per route
         std::array<double, 12> route_conflicts_cleared_at{};  // When conflicts first became clear (-1 = not clear)
+        std::array<double, 12> route_red_since{};             // When route last turned red (-1 = not red)
         std::array<std::array<bool, 12>, 12> route_conflict_matrix{};
         bool route_conflict_matrix_ready = false;
         int scheduler_anchor_route_index = -1;

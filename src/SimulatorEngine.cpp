@@ -647,6 +647,7 @@ namespace crossroads {
         route_initial_waiting_count.fill(0);
         route_crossing_vehicle_count.fill(0);
         route_conflicts_cleared_at.fill(-1.0);
+        route_red_since.fill(-1.0);
         scheduler_served_this_cycle.fill(false);
         scheduler_clearance_blocked_routes.fill(false);
 
@@ -1139,6 +1140,23 @@ namespace crossroads {
             route_wait_seconds[right_idx] = routes[right_idx].wait_seconds;
         }
 
+        bool any_waiting_routes = false;
+        bool all_waiting_served = true;
+        for (const auto& route : routes) {
+            if (!route.waiting_demand) {
+                continue;
+            }
+            any_waiting_routes = true;
+            const std::size_t idx = routeIndex(route.approach, route.movement);
+            if (!scheduler_served_this_cycle[idx]) {
+                all_waiting_served = false;
+            }
+        }
+
+        if (any_waiting_routes && all_waiting_served) {
+            scheduler_served_this_cycle.fill(false);
+        }
+
         // Count crossing vehicles per route (vehicles that started crossing but haven't exited)
         route_crossing_vehicle_count.fill(0);
         for (int approach_int = 0; approach_int < 4; ++approach_int) {
@@ -1192,6 +1210,7 @@ namespace crossroads {
         // Track when conflicts first became clear per route,
         // and require an extra 2-second buffer before activation.
         constexpr double kClearanceBufferSeconds = 2.0;
+        constexpr double kRedHoldSeconds = 2.0;
         for (std::size_t ri = 0; ri < kRouteCount; ++ri) {
             if (!route_configured[ri])
                 continue;
@@ -1210,6 +1229,27 @@ namespace crossroads {
             return (current_time - route_conflicts_cleared_at[route_idx]) >= kClearanceBufferSeconds;
         };
 
+        auto routeIsRed = [&](const IntersectionState& state, ApproachId approach, MovementType movement) -> bool {
+            switch (movement) {
+                case MovementType::Straight:
+                    return approachMainLight(approach, state) == LightState::Red;
+                case MovementType::Left:
+                    return leftTurnLightFor(directionFromApproach(approach), state) == LightState::Red;
+                case MovementType::Right:
+                    return rightTurnLightFor(directionFromApproach(approach), state) == LightState::Red;
+            }
+            return false;
+        };
+
+        std::size_t max_waiting_demand = 0;
+        for (const auto& route : routes) {
+            if (route.waiting_demand) {
+                max_waiting_demand = std::max(max_waiting_demand, route.demand_count);
+            }
+        }
+
+        constexpr double kCycleUnservedBonus = 15'000.0;
+
         int anchor_route_index = -1;
         double anchor_score = -1.0;
         for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx) {
@@ -1225,9 +1265,19 @@ namespace crossroads {
                                              ? std::max(0.0, current_time - route_last_served_time[route_idx])
                                              : movement_starvation_max_wait_seconds;
             const double demand_pressure = static_cast<double>(route.demand_count);
-            double score = route_priority_wait_weight * route.wait_seconds +
-                           route_priority_queue_weight * demand_pressure + route_priority_aging_weight * aging_seconds +
-                           (0.75 * route.wait_seconds * demand_pressure);
+
+            // Emphasize longer queues: aggressive weighting up to ~4x at the longest queue.
+            const double queue_ratio =
+                max_waiting_demand > 0 ? demand_pressure / static_cast<double>(max_waiting_demand) : 0.0;
+            const double queue_weight =
+                route_priority_queue_weight * (1.0 + 2.0 * queue_ratio + queue_ratio * queue_ratio);
+
+            double score = route_priority_wait_weight * route.wait_seconds + queue_weight * demand_pressure +
+                           route_priority_aging_weight * aging_seconds + (0.75 * route.wait_seconds * demand_pressure);
+
+            if (!scheduler_served_this_cycle[route_idx]) {
+                score += kCycleUnservedBonus;
+            }
 
             constexpr double kMinimumGreenLockBonus = 1'000'000.0;
             constexpr double kServiceContinuationBonus = 25'000.0;
@@ -1307,7 +1357,24 @@ namespace crossroads {
             // routes have no crossing vehicles remaining in the intersection.
             const bool anchor_already_green = prev_route_green_active[static_cast<std::size_t>(anchor_route_index)];
             const bool conflicts_clear = areConflictsClearWithBuffer(static_cast<std::size_t>(anchor_route_index));
-            const bool can_activate_anchor = anchor_already_green || conflicts_clear;
+            bool conflicts_all_red_held = true;
+            for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx) {
+                if (!route_configured[route_idx]) {
+                    continue;
+                }
+                if (!route_conflict_matrix[static_cast<std::size_t>(anchor_route_index)][route_idx]) {
+                    continue;
+                }
+                if (!routeIsRed(override_state, routes[route_idx].approach, routes[route_idx].movement)) {
+                    conflicts_all_red_held = false;
+                    break;
+                }
+                if (route_red_since[route_idx] < 0.0 || (current_time - route_red_since[route_idx]) < kRedHoldSeconds) {
+                    conflicts_all_red_held = false;
+                    break;
+                }
+            }
+            const bool can_activate_anchor = anchor_already_green || (conflicts_clear && conflicts_all_red_held);
             scheduler_clearance_blocked_routes[static_cast<std::size_t>(anchor_route_index)] = !can_activate_anchor;
 
             if (can_activate_anchor) {
@@ -1357,6 +1424,30 @@ namespace crossroads {
                         }
                     }
                     if (conflicts) {
+                        continue;
+                    }
+
+                    const bool candidate_conflicts_clear = areConflictsClearWithBuffer(candidate_idx);
+                    bool candidate_conflicts_all_red_held = true;
+                    for (std::size_t other_idx = 0; other_idx < routes.size(); ++other_idx) {
+                        if (!route_configured[other_idx]) {
+                            continue;
+                        }
+                        if (!route_conflict_matrix[candidate_idx][other_idx]) {
+                            continue;
+                        }
+                        if (!routeIsRed(override_state, routes[other_idx].approach, routes[other_idx].movement)) {
+                            candidate_conflicts_all_red_held = false;
+                            break;
+                        }
+                        if (route_red_since[other_idx] < 0.0 ||
+                            (current_time - route_red_since[other_idx]) < kRedHoldSeconds) {
+                            candidate_conflicts_all_red_held = false;
+                            break;
+                        }
+                    }
+
+                    if (!(candidate_conflicts_clear && candidate_conflicts_all_red_held)) {
                         continue;
                     }
 
@@ -1457,6 +1548,24 @@ namespace crossroads {
         apply_minimum_green_hold(10, effective_light_state.turnEastSouth, prev_effective.turnEastSouth);
         apply_minimum_green_hold(11, effective_light_state.turnWestNorth, prev_effective.turnWestNorth);
 
+        // Track how long each route has been red (post-discipline state).
+        for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx) {
+            if (!route_configured[route_idx]) {
+                route_red_since[route_idx] = -1.0;
+                continue;
+            }
+
+            const bool is_red =
+                routeIsRed(effective_light_state, routes[route_idx].approach, routes[route_idx].movement);
+            if (is_red) {
+                if (route_red_since[route_idx] < 0.0) {
+                    route_red_since[route_idx] = current_time;
+                }
+            } else {
+                route_red_since[route_idx] = -1.0;
+            }
+        }
+
         for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx) {
             if (!route_configured[route_idx]) {
                 route_green_active[route_idx] = false;
@@ -1472,6 +1581,7 @@ namespace crossroads {
                 route_green_started_at[route_idx] = current_time;
                 route_vehicles_started_this_green[route_idx] = 0;
                 route_initial_waiting_count[route_idx] = static_cast<int>(routes[route_idx].demand_count);
+                scheduler_served_this_cycle[route_idx] = true;
             } else if (was_green && !is_green) {
                 route_last_served_time[route_idx] = current_time;
                 route_green_started_at[route_idx] = -1.0;
@@ -1888,6 +1998,7 @@ namespace crossroads {
         route_initial_waiting_count.fill(0);
         route_crossing_vehicle_count.fill(0);
         route_conflicts_cleared_at.fill(-1.0);
+        route_red_since.fill(-1.0);
         scheduler_anchor_route_index = -1;
         scheduler_parallel_routes.fill(false);
         scheduler_blocked_routes.fill(false);
