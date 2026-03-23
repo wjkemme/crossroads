@@ -32,7 +32,7 @@
                 <svg id="routeMap" class="route-map" viewBox="0 0 640 520" role="img"
                     aria-label="Configured route schematic"></svg>
             </div>
-            <div id="approaches" class="grid"></div>
+            <div id="compactEditor"></div>
             <div id="status" class="status">Ready</div>
             <div id="banner" class="banner"></div>
             <ul id="errors" class="errors"></ul>
@@ -62,9 +62,27 @@
         const APPROACH_ORDER = ['north', 'east', 'south', 'west'];
         const MOVEMENTS = ['left', 'straight', 'right'];
 
-        const approachesEl = document.getElementById('approaches');
+        const compactEditorEl = document.getElementById('compactEditor');
         const graphBoardEl = document.getElementById('graphBoard');
         const routeMapEl = document.getElementById('routeMap');
+
+        let compactFromDir = 'north';
+        let compactFromLane = 0;
+        let compactToDir = 'north';
+
+        function insertLaneAt(aIdx, insertIdx) {
+            const approach = state.approaches[aIdx];
+            const approachId = approach.id;
+            approach.lanes.splice(insertIdx, 0, defaultLane(approachId, insertIdx));
+            for (const c of state.lane_connections || []) {
+                if (c.from_approach === approachId && c.from_lane_index >= insertIdx) {
+                    c.from_lane_index += 1;
+                }
+            }
+            compactFromLane = insertIdx;
+            renderEditor();
+        }
+
         const statusEl = document.getElementById('status');
         const bannerEl = document.getElementById('banner');
         const errorsEl = document.getElementById('errors');
@@ -1449,123 +1467,145 @@
             renderRouteMap();
         }
 
-        function renderEditor() {
-            normalizeConnections();
-            approachesEl.innerHTML = '';
+        function renderCompactEditor() {
+            compactEditorEl.innerHTML = '';
 
-            for (let aIdx = 0; aIdx < state.approaches.length; aIdx++) {
-                const approach = state.approaches[aIdx];
+            const wrap = document.createElement('div');
+            wrap.className = 'ce-wrap';
 
-                const card = document.createElement('div');
-                card.className = 'approach-card';
+            // ══ FROM panel ══
+            const fromPanel = document.createElement('div');
+            fromPanel.className = 'ce-panel';
 
-                const head = document.createElement('div');
-                head.className = 'approach-head';
+            const fromTitle = document.createElement('div');
+            fromTitle.className = 'ce-panel-title';
+            fromTitle.textContent = 'From (incoming lanes)';
+            fromPanel.appendChild(fromTitle);
 
-                const left = document.createElement('div');
-                left.className = 'approach-title';
-                left.textContent = approachWord(approach.id);
+            const fromTabs = document.createElement('div');
+            fromTabs.className = 'ce-tabs';
+            for (const dir of APPROACH_ORDER) {
+                const tab = document.createElement('button');
+                tab.className = 'ce-tab' + (dir === compactFromDir ? ' ce-tab-active' : '');
+                tab.textContent = approachWord(dir);
+                tab.onclick = () => { compactFromDir = dir; compactFromLane = 0; renderCompactEditor(); };
+                fromTabs.appendChild(tab);
+            }
+            fromPanel.appendChild(fromTabs);
 
-                const right = document.createElement('input');
-                right.type = 'text';
-                right.className = 'approach-name';
-                right.value = approach.name;
-                right.placeholder = 'Approach name';
-                right.oninput = (e) => {
-                    state.approaches[aIdx].name = e.target.value;
-                    renderGraph();
+            const fromApproach = approachById(compactFromDir);
+            if (fromApproach) {
+                const aIdx = state.approaches.indexOf(fromApproach);
+
+                const nameRow = document.createElement('div');
+                nameRow.className = 'ce-name-row';
+                const nameLabel = document.createElement('label');
+                nameLabel.textContent = 'Name:';
+                const nameInput = document.createElement('input');
+                nameInput.type = 'text';
+                nameInput.className = 'approach-name';
+                nameInput.value = fromApproach.name;
+                nameInput.placeholder = 'Approach name';
+                nameInput.oninput = (e) => { state.approaches[aIdx].name = e.target.value; renderGraph(); };
+                nameLabel.appendChild(nameInput);
+                nameRow.appendChild(nameLabel);
+                fromPanel.appendChild(nameRow);
+
+                const laneTabs = document.createElement('div');
+                laneTabs.className = 'ce-lane-tabs';
+                for (let lIdx = 0; lIdx < fromApproach.lanes.length; lIdx++) {
+                    const ins = document.createElement('button');
+                    ins.className = 'ce-lane-tab ce-lane-insert';
+                    ins.textContent = '+';
+                    ins.title = `Insert lane at index ${lIdx}`;
+                    ins.onclick = ((idx) => () => insertLaneAt(aIdx, idx))(lIdx);
+                    laneTabs.appendChild(ins);
+
+                    const lt = document.createElement('button');
+                    lt.className = 'ce-lane-tab' + (lIdx === compactFromLane ? ' ce-lane-tab-active' : '');
+                    lt.textContent = laneCode(fromApproach.id, lIdx);
+                    lt.onclick = () => { compactFromLane = lIdx; renderCompactEditor(); };
+                    laneTabs.appendChild(lt);
+                }
+                const addLaneBtn = document.createElement('button');
+                addLaneBtn.className = 'ce-lane-tab ce-lane-add';
+                addLaneBtn.textContent = '+';
+                addLaneBtn.title = 'Add lane at the end';
+                addLaneBtn.onclick = () => {
+                    const nextIdx = state.approaches[aIdx].lanes.length;
+                    state.approaches[aIdx].lanes.push(defaultLane(fromApproach.id, nextIdx));
+                    compactFromLane = nextIdx;
+                    renderEditor();
                 };
+                laneTabs.appendChild(addLaneBtn);
+                fromPanel.appendChild(laneTabs);
 
-                head.appendChild(left);
-                head.appendChild(right);
-                card.appendChild(head);
+                if (compactFromLane >= fromApproach.lanes.length) {
+                    compactFromLane = Math.max(0, fromApproach.lanes.length - 1);
+                }
+                const lane = fromApproach.lanes[compactFromLane];
+                if (lane) {
+                    const lIdx = compactFromLane;
+                    const detail = document.createElement('div');
+                    detail.className = 'ce-lane-detail';
 
-                const fromHeader = document.createElement('div');
-                fromHeader.className = 'section-header';
-                fromHeader.textContent = `${fromLabel(approach.id)} (${approach.lanes.length} ${approach.lanes.length === 1 ? 'lane' : 'lanes'})`;
-                card.appendChild(fromHeader);
-
-                const laneList = document.createElement('div');
-                laneList.className = 'lane-list';
-
-                for (let lIdx = 0; lIdx < approach.lanes.length; lIdx++) {
-                    const lane = approach.lanes[lIdx];
-
-                    const laneRow = document.createElement('div');
-                    laneRow.className = 'lane-row';
-
-                    const laneTop = document.createElement('div');
-                    laneTop.className = 'lane-top';
-
-                    const laneCodeEl = document.createElement('div');
-                    laneCodeEl.className = 'lane-code';
-                    laneCodeEl.textContent = laneCode(approach.id, lIdx);
-
+                    const delRow = document.createElement('div');
+                    delRow.className = 'ce-detail-row ce-detail-actions';
                     const delBtn = document.createElement('button');
                     delBtn.className = 'danger';
-                    delBtn.textContent = 'Delete lane';
+                    delBtn.textContent = 'Delete this lane';
                     delBtn.onclick = () => {
                         state.approaches[aIdx].lanes.splice(lIdx, 1);
-                        renderEditor();
-                    };
-
-                    laneTop.appendChild(laneCodeEl);
-                    laneTop.appendChild(delBtn);
-                    laneRow.appendChild(laneTop);
-
-                    const opts = document.createElement('div');
-                    opts.className = 'lane-options';
-
-                    const lcLabel = document.createElement('label');
-                    const lcChk = document.createElement('input');
-                    lcChk.type = 'checkbox';
-                    lcChk.checked = !!lane.supports_lane_change;
-                    lcChk.onchange = (e) => {
-                        state.approaches[aIdx].lanes[lIdx].supports_lane_change = !!e.target.checked;
-                        renderGraph();
-                    };
-                    lcLabel.appendChild(lcChk);
-                    lcLabel.appendChild(document.createTextNode('supports lane change'));
-                    opts.appendChild(lcLabel);
-
-                    const connLabel = document.createElement('label');
-                    const connChk = document.createElement('input');
-                    connChk.type = 'checkbox';
-                    connChk.checked = !!lane.connected_to_intersection;
-                    connChk.onchange = (e) => {
-                        const value = !!e.target.checked;
-                        state.approaches[aIdx].lanes[lIdx].connected_to_intersection = value;
-                        if (!value) {
-                            state.approaches[aIdx].lanes[lIdx].has_traffic_light = false;
+                        if (compactFromLane >= state.approaches[aIdx].lanes.length) {
+                            compactFromLane = Math.max(0, state.approaches[aIdx].lanes.length - 1);
                         }
                         renderEditor();
                     };
-                    connLabel.appendChild(connChk);
-                    connLabel.appendChild(document.createTextNode('connected to intersection'));
-                    opts.appendChild(connLabel);
+                    delRow.appendChild(delBtn);
+                    detail.appendChild(delRow);
 
-                    const lightLabel = document.createElement('label');
-                    const lightChk = document.createElement('input');
-                    lightChk.type = 'checkbox';
-                    lightChk.checked = !!lane.has_traffic_light;
-                    lightChk.disabled = !lane.connected_to_intersection;
-                    lightChk.onchange = (e) => {
+                    const checksRow = document.createElement('div');
+                    checksRow.className = 'ce-detail-row ce-checks';
+
+                    const mkCheck = (label, checked, disabled, onChange) => {
+                        const lbl = document.createElement('label');
+                        const chk = document.createElement('input');
+                        chk.type = 'checkbox';
+                        chk.checked = checked;
+                        chk.disabled = !!disabled;
+                        chk.onchange = onChange;
+                        lbl.appendChild(chk);
+                        lbl.appendChild(document.createTextNode(label));
+                        return lbl;
+                    };
+
+                    checksRow.appendChild(mkCheck('supports lane change', !!lane.supports_lane_change, false, (e) => {
+                        state.approaches[aIdx].lanes[lIdx].supports_lane_change = !!e.target.checked;
+                        renderGraph();
+                    }));
+                    checksRow.appendChild(mkCheck('connected to intersection', !!lane.connected_to_intersection, false, (e) => {
+                        const value = !!e.target.checked;
+                        state.approaches[aIdx].lanes[lIdx].connected_to_intersection = value;
+                        if (!value) state.approaches[aIdx].lanes[lIdx].has_traffic_light = false;
+                        renderEditor();
+                    }));
+                    checksRow.appendChild(mkCheck('stoplight at lane end', !!lane.has_traffic_light, !lane.connected_to_intersection, (e) => {
                         state.approaches[aIdx].lanes[lIdx].has_traffic_light = !!e.target.checked;
                         renderGraph();
-                    };
-                    lightLabel.appendChild(lightChk);
-                    lightLabel.appendChild(document.createTextNode('stoplight at lane end'));
-                    opts.appendChild(lightLabel);
+                    }));
+                    detail.appendChild(checksRow);
 
-                    const allowedBox = document.createElement('div');
-                    allowedBox.className = 'allowed-box';
-                    const allowedTitle = document.createElement('div');
-                    allowedTitle.className = 'allowed-title';
-                    allowedTitle.textContent = 'Allowed Direction';
-                    const allowedOptions = document.createElement('div');
-                    allowedOptions.className = 'allowed-options';
-                    const movementMap = document.createElement('div');
-                    movementMap.className = 'movement-map';
+                    const moveBox = document.createElement('div');
+                    moveBox.className = 'ce-move-box';
+                    const moveTitle = document.createElement('div');
+                    moveTitle.className = 'allowed-title';
+                    moveTitle.textContent = 'Allowed Direction';
+                    moveBox.appendChild(moveTitle);
+
+                    const moveChecks = document.createElement('div');
+                    moveChecks.className = 'allowed-options';
+                    const moveMap = document.createElement('div');
+                    moveMap.className = 'movement-map';
 
                     for (const movement of MOVEMENTS) {
                         const moveLabel = document.createElement('label');
@@ -1575,25 +1615,17 @@
                         moveChk.onchange = (e) => {
                             const targetLane = state.approaches[aIdx].lanes[lIdx];
                             const set = new Set(targetLane.allowed_movements);
-                            if (e.target.checked) {
-                                set.add(movement);
-                            } else {
-                                set.delete(movement);
-                            }
+                            if (e.target.checked) { set.add(movement); } else { set.delete(movement); }
                             targetLane.allowed_movements = MOVEMENTS.filter((m) => set.has(m));
                             normalizeConnections();
                             renderEditor();
                             renderGraph();
                         };
                         moveLabel.appendChild(moveChk);
-                        if (movement === 'left') {
-                            moveLabel.appendChild(document.createTextNode('to the left'));
-                        } else if (movement === 'right') {
-                            moveLabel.appendChild(document.createTextNode('to the right'));
-                        } else {
-                            moveLabel.appendChild(document.createTextNode('straight ahead'));
-                        }
-                        allowedOptions.appendChild(moveLabel);
+                        moveLabel.appendChild(document.createTextNode(
+                            movement === 'left' ? 'to the left' : (movement === 'right' ? 'to the right' : 'straight ahead')
+                        ));
+                        moveChecks.appendChild(moveLabel);
 
                         if (lane.allowed_movements.includes(movement)) {
                             const mappingRow = document.createElement('div');
@@ -1604,16 +1636,14 @@
                             tag.textContent = movement === 'left' ? 'to the left' : (movement === 'right' ? 'to the right' : 'straight ahead');
 
                             const targetApproachSelect = document.createElement('select');
-                            const expectedApproach = destinationApproachFor(approach.id, movement);
-                            const currentConnection = getConnection(approach.id, lIdx, movement);
+                            const expectedApproach = destinationApproachFor(fromApproach.id, movement);
+                            const currentConnection = getConnection(fromApproach.id, lIdx, movement);
                             const selectedApproach = currentConnection ? currentConnection.to_approach : expectedApproach;
-                            for (const optionApproachId of APPROACH_ORDER) {
+                            for (const optId of APPROACH_ORDER) {
                                 const option = document.createElement('option');
-                                option.value = optionApproachId;
-                                option.textContent = toLabel(optionApproachId);
-                                if (optionApproachId === selectedApproach) {
-                                    option.selected = true;
-                                }
+                                option.value = optId;
+                                option.textContent = toLabel(optId);
+                                if (optId === selectedApproach) option.selected = true;
                                 targetApproachSelect.appendChild(option);
                             }
 
@@ -1625,20 +1655,19 @@
                             targetLaneInput.max = String(maxLane);
                             targetLaneInput.value = String(currentConnection ? currentConnection.to_lane_index : Math.min(lIdx, maxLane));
 
-                            const applyConnection = () => {
-                                const toApproach = targetApproachSelect.value;
-                                const toApproachObj = approachById(toApproach);
-                                const toMax = toApproachObj ? Math.max(0, toLaneCountForApproach(toApproachObj) - 1) : 0;
+                            const applyConn = () => {
+                                const toApp = targetApproachSelect.value;
+                                const toAppObj = approachById(toApp);
+                                const toMax = toAppObj ? Math.max(0, toLaneCountForApproach(toAppObj) - 1) : 0;
                                 const requested = Number(targetLaneInput.value);
                                 const targetIdx = Number.isFinite(requested) ? Math.max(0, Math.min(toMax, requested)) : 0;
                                 targetLaneInput.max = String(toMax);
                                 targetLaneInput.value = String(targetIdx);
-                                setConnection(approach.id, lIdx, movement, toApproach, targetIdx);
+                                setConnection(fromApproach.id, lIdx, movement, toApp, targetIdx);
                                 renderRouteMap();
                             };
-
-                            targetApproachSelect.onchange = applyConnection;
-                            targetLaneInput.oninput = applyConnection;
+                            targetApproachSelect.onchange = applyConn;
+                            targetLaneInput.oninput = applyConn;
 
                             const laneLabel = document.createElement('span');
                             laneLabel.textContent = 'to lane index';
@@ -1648,66 +1677,65 @@
                             mappingRow.appendChild(targetApproachSelect);
                             mappingRow.appendChild(laneLabel);
                             mappingRow.appendChild(targetLaneInput);
-                            movementMap.appendChild(mappingRow);
+                            moveMap.appendChild(mappingRow);
                         }
                     }
 
-                    laneRow.appendChild(opts);
-                    allowedBox.appendChild(allowedTitle);
-                    allowedBox.appendChild(allowedOptions);
-                    allowedBox.appendChild(movementMap);
-                    laneRow.appendChild(allowedBox);
-                    laneList.appendChild(laneRow);
+                    moveBox.appendChild(moveChecks);
+                    moveBox.appendChild(moveMap);
+                    detail.appendChild(moveBox);
+
+                    fromPanel.appendChild(detail);
                 }
 
-                card.appendChild(laneList);
-
-                const fromActions = document.createElement('div');
-                fromActions.className = 'row';
-                fromActions.style.marginTop = '8px';
-                fromActions.style.marginBottom = '0';
-
-                const addBtn = document.createElement('button');
-                addBtn.className = 'secondary';
-                addBtn.textContent = 'Add lane';
-                addBtn.onclick = () => {
-                    const nextLaneIndex = state.approaches[aIdx].lanes.length;
-                    state.approaches[aIdx].lanes.push(defaultLane(state.approaches[aIdx].id, nextLaneIndex));
-                    renderEditor();
-                };
-
-                const hint = document.createElement('span');
-                hint.className = 'small';
+                const hint = document.createElement('div');
+                hint.className = 'small ce-hint';
                 hint.textContent = 'Lane indices are per direction: 0 = inner lane, higher = outward.';
+                fromPanel.appendChild(hint);
+            }
 
-                fromActions.appendChild(addBtn);
-                fromActions.appendChild(hint);
-                card.appendChild(fromActions);
+            wrap.appendChild(fromPanel);
 
-                const toHeader = document.createElement('div');
-                toHeader.className = 'section-header';
-                const toLaneCount = toLaneCountForApproach(approach);
-                toHeader.textContent = `${toLabel(approach.id)} (${toLaneCount} ${toLaneCount === 1 ? 'lane' : 'lanes'})`;
-                card.appendChild(toHeader);
+            // ══ TO panel ══
+            const toPanel = document.createElement('div');
+            toPanel.className = 'ce-panel';
 
-                const toActions = document.createElement('div');
-                toActions.className = 'row';
-                toActions.style.marginTop = '8px';
-                toActions.style.marginBottom = '0';
+            const toTitleEl = document.createElement('div');
+            toTitleEl.className = 'ce-panel-title';
+            toTitleEl.textContent = 'To (outgoing lanes)';
+            toPanel.appendChild(toTitleEl);
 
-                const toLaneLabel = document.createElement('label');
-                toLaneLabel.textContent = 'Number of lanes:';
-                const toLaneInput = document.createElement('input');
-                toLaneInput.type = 'number';
-                toLaneInput.min = '1';
-                toLaneInput.max = '64';
-                toLaneInput.value = String(toLaneCount);
-                toLaneInput.style.width = '96px';
-                toLaneInput.oninput = (e) => {
+            const toTabs = document.createElement('div');
+            toTabs.className = 'ce-tabs';
+            for (const dir of APPROACH_ORDER) {
+                const tab = document.createElement('button');
+                tab.className = 'ce-tab' + (dir === compactToDir ? ' ce-tab-active' : '');
+                tab.textContent = approachWord(dir);
+                tab.onclick = () => { compactToDir = dir; renderCompactEditor(); };
+                toTabs.appendChild(tab);
+            }
+            toPanel.appendChild(toTabs);
+
+            const toApproach = approachById(compactToDir);
+            if (toApproach) {
+                const toAIdx = state.approaches.indexOf(toApproach);
+                const toLaneCount = toLaneCountForApproach(toApproach);
+
+                const toCountRow = document.createElement('div');
+                toCountRow.className = 'ce-name-row';
+                const toCountLabel = document.createElement('label');
+                toCountLabel.textContent = 'Number of lanes:';
+                const toCountInput = document.createElement('input');
+                toCountInput.type = 'number';
+                toCountInput.min = '1';
+                toCountInput.max = '64';
+                toCountInput.value = String(toLaneCount);
+                toCountInput.style.width = '96px';
+                toCountInput.oninput = (e) => {
                     const raw = Number(e.target.value);
                     const nextCount = Number.isFinite(raw) ? Math.max(1, Math.min(64, Math.floor(raw))) : 1;
-                    const currentCount = toLaneCountForApproach(state.approaches[aIdx]);
-                    const approachId = state.approaches[aIdx].id;
+                    const currentCount = toLaneCountForApproach(state.approaches[toAIdx]);
+                    const approachId = state.approaches[toAIdx].id;
 
                     if (nextCount < currentCount) {
                         const blocked = (state.lane_connections || []).filter(c =>
@@ -1730,18 +1758,40 @@
                     }
 
                     clearBanner();
-                    state.approaches[aIdx].to_lane_count = nextCount;
+                    state.approaches[toAIdx].to_lane_count = nextCount;
                     normalizeConnections();
                     renderEditor();
                 };
-                toLaneLabel.appendChild(toLaneInput);
+                toCountLabel.appendChild(toCountInput);
+                toCountRow.appendChild(toCountLabel);
+                toPanel.appendChild(toCountRow);
 
-                toActions.appendChild(toLaneLabel);
-                card.appendChild(toActions);
-
-                approachesEl.appendChild(card);
+                const incomingConns = (state.lane_connections || []).filter(c => c.to_approach === compactToDir)
+                    .sort((a, b) => a.to_lane_index - b.to_lane_index);
+                if (incomingConns.length > 0) {
+                    const connList = document.createElement('div');
+                    connList.className = 'ce-conn-list';
+                    const connTitle = document.createElement('div');
+                    connTitle.className = 'ce-conn-title';
+                    connTitle.textContent = `Incoming connections (${incomingConns.length})`;
+                    connList.appendChild(connTitle);
+                    for (const c of incomingConns) {
+                        const item = document.createElement('div');
+                        item.className = 'ce-conn-item';
+                        item.textContent = `lane ${c.to_lane_index} \u2190 ${laneCode(c.from_approach, c.from_lane_index)} (${c.movement})`;
+                        connList.appendChild(item);
+                    }
+                    toPanel.appendChild(connList);
+                }
             }
 
+            wrap.appendChild(toPanel);
+            compactEditorEl.appendChild(wrap);
+        }
+
+        function renderEditor() {
+            normalizeConnections();
+            renderCompactEditor();
             renderGraph();
             refreshPrimaryActionButtons();
         }

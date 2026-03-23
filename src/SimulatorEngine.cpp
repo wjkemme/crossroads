@@ -503,12 +503,30 @@ namespace crossroads {
                 return {p0, p3};
             }
 
-            if (connection.movement == MovementType::Left) {
-                return {p0, RoutePoint{0.0, 0.0}, p3};
-            }
-
             const RoutePoint in_dir = inboundDirection(connection.from_approach);
             const RoutePoint out_dir = outboundDirection(connection.to_approach);
+
+            if (connection.movement == MovementType::Left) {
+                const double control_distance = 0.55;
+                const RoutePoint c1 = {p0.x + in_dir.x * control_distance, p0.y + in_dir.y * control_distance};
+                const RoutePoint c2 = {p3.x - out_dir.x * control_distance, p3.y - out_dir.y * control_distance};
+
+                constexpr int samples = 18;
+                std::vector<RoutePoint> path;
+                path.reserve(samples + 1);
+                for (int i = 0; i <= samples; ++i) {
+                    const double t = static_cast<double>(i) / static_cast<double>(samples);
+                    const double mt = 1.0 - t;
+                    const double b0 = mt * mt * mt;
+                    const double b1 = 3.0 * mt * mt * t;
+                    const double b2 = 3.0 * mt * t * t;
+                    const double b3 = t * t * t;
+                    path.push_back(
+                        {b0 * p0.x + b1 * c1.x + b2 * c2.x + b3 * p3.x, b0 * p0.y + b1 * c1.y + b2 * c2.y + b3 * p3.y});
+                }
+                return path;
+            }
+
             const double control_distance = 0.18;
 
             const RoutePoint c1 = {p0.x + in_dir.x * control_distance, p0.y + in_dir.y * control_distance};
@@ -542,8 +560,8 @@ namespace crossroads {
             const double o3 = crossProduct(c, d, a);
             const double o4 = crossProduct(c, d, b);
 
-            const bool ab_straddles_cd = (o1 > eps && o2 < -eps) || (o1 < -eps && o2 > eps);
-            const bool cd_straddles_ab = (o3 > eps && o4 < -eps) || (o3 < -eps && o4 > eps);
+            const bool ab_straddles_cd = (o1 >= eps && o2 <= -eps) || (o1 <= -eps && o2 >= eps);
+            const bool cd_straddles_ab = (o3 >= eps && o4 <= -eps) || (o3 <= -eps && o4 >= eps);
             return ab_straddles_cd && cd_straddles_ab;
         }
 
@@ -1308,7 +1326,7 @@ namespace crossroads {
 
             double score = route_priority_wait_weight * route.wait_seconds + queue_weight * demand_pressure +
                            route_priority_aging_weight * aging_seconds + (0.75 * route.wait_seconds * demand_pressure) +
-                           stopped_bonus;
+                           stopped_bonus + 0.5 * route.wait_seconds * route.wait_seconds;
 
             if (stopped_pressure > static_cast<double>(kStoppedPriorityThreshold)) {
                 score += kStoppedPriorityBonus;
@@ -1320,7 +1338,7 @@ namespace crossroads {
 
             constexpr double kMinimumGreenLockBonus = 1'000'000.0;
             constexpr double kServiceContinuationBonus = 25'000.0;
-            constexpr double kStarvationBonus = 20'000.0;
+            constexpr double kStarvationBonus = 200'000.0;
 
             int conflicting_waiting_routes = 0;
             for (std::size_t other_idx = 0; other_idx < routes.size(); ++other_idx) {
@@ -1356,9 +1374,24 @@ namespace crossroads {
 
                 // Initial-waiters lock: keep green long enough so all vehicles that were
                 // waiting when this route turned green have started crossing.
-                if (route_initial_waiting_count[route_idx] > 0 &&
+                // However, break this lock if any conflicting route is starving.
+                bool conflicting_route_starving = false;
+                for (std::size_t other_idx = 0; other_idx < routes.size(); ++other_idx) {
+                    if (other_idx == route_idx || !route_configured[other_idx]) {
+                        continue;
+                    }
+                    if (!route_conflict_matrix[route_idx][other_idx]) {
+                        continue;
+                    }
+                    if (routes[other_idx].waiting_demand &&
+                        routes[other_idx].wait_seconds >= movement_starvation_max_wait_seconds) {
+                        conflicting_route_starving = true;
+                        break;
+                    }
+                }
+                if (!conflicting_route_starving && route_initial_waiting_count[route_idx] > 0 &&
                     route_vehicles_started_this_green[route_idx] < route_initial_waiting_count[route_idx] &&
-                    green_elapsed < 2.0 * route_max_green_seconds) {
+                    green_elapsed < 1.5 * route_max_green_seconds) {
                     constexpr double kInitialWaitersLockBonus = 500'000.0;
                     score += kInitialWaitersLockBonus;
                 }
@@ -1392,9 +1425,10 @@ namespace crossroads {
                 setRouteLight(override_state, routes[route_idx].approach, routes[route_idx].movement, LightState::Red);
             }
 
-            // Clearance gate: a new anchor can only go green when all conflicting
-            // routes have no crossing vehicles remaining in the intersection.
-            const bool anchor_already_green = prev_route_green_active[static_cast<std::size_t>(anchor_route_index)];
+            // Clearance gate: anchor can only go green when all conflicting
+            // routes are red for at least kRedHoldSeconds AND have no crossing
+            // vehicles remaining in the intersection.  No bypass for already-green
+            // anchors — every green activation must satisfy the gate.
             const bool conflicts_clear = areConflictsClearWithBuffer(static_cast<std::size_t>(anchor_route_index));
             bool conflicts_all_red_held = true;
             for (std::size_t route_idx = 0; route_idx < routes.size(); ++route_idx) {
@@ -1413,7 +1447,7 @@ namespace crossroads {
                     break;
                 }
             }
-            const bool can_activate_anchor = anchor_already_green || (conflicts_clear && conflicts_all_red_held);
+            const bool can_activate_anchor = conflicts_clear && conflicts_all_red_held;
             scheduler_clearance_blocked_routes[static_cast<std::size_t>(anchor_route_index)] = !can_activate_anchor;
 
             if (can_activate_anchor) {

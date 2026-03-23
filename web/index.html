@@ -1224,28 +1224,28 @@
                 for (const entry of laneConnections) {
                     addUnique(entry);
                 }
-            }
-
-            for (const approachId of ['north', 'east', 'south', 'west']) {
-                const lanes = lanesForDirection(approachId);
-                for (let laneIndex = 0; laneIndex < lanes.length; laneIndex++) {
-                    const laneCfg = lanes[laneIndex] || {};
-                    if (!laneCfg.connected_to_intersection) {
-                        continue;
-                    }
-                    const moves = Array.isArray(laneCfg.allowed_movements) && laneCfg.allowed_movements.length > 0
-                        ? laneCfg.allowed_movements
-                        : ['straight'];
-                    for (const movement of moves) {
-                        const toApproach = destinationApproachForMovement(approachId, movement);
-                        const toMax = Math.max(0, clampLaneCount(toLaneCountsByApproach[toApproach] || 1) - 1);
-                        addUnique({
-                            from_approach: approachId,
-                            from_lane_index: laneIndex,
-                            movement: String(movement || 'straight').toLowerCase(),
-                            to_approach: toApproach,
-                            to_lane_index: Math.min(laneIndex, toMax)
-                        });
+            } else {
+                for (const approachId of ['north', 'east', 'south', 'west']) {
+                    const lanes = lanesForDirection(approachId);
+                    for (let laneIndex = 0; laneIndex < lanes.length; laneIndex++) {
+                        const laneCfg = lanes[laneIndex] || {};
+                        if (!laneCfg.connected_to_intersection) {
+                            continue;
+                        }
+                        const moves = Array.isArray(laneCfg.allowed_movements) && laneCfg.allowed_movements.length > 0
+                            ? laneCfg.allowed_movements
+                            : ['straight'];
+                        for (const movement of moves) {
+                            const toApproach = destinationApproachForMovement(approachId, movement);
+                            const toMax = Math.max(0, clampLaneCount(toLaneCountsByApproach[toApproach] || 1) - 1);
+                            addUnique({
+                                from_approach: approachId,
+                                from_lane_index: laneIndex,
+                                movement: String(movement || 'straight').toLowerCase(),
+                                to_approach: toApproach,
+                                to_lane_index: Math.min(laneIndex, toMax)
+                            });
+                        }
                     }
                 }
             }

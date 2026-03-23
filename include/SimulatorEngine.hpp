@@ -121,11 +121,11 @@ namespace crossroads {
         double right_turn_min_green_seconds = 2.0;
         double straight_starvation_threshold_seconds = 2.0;
         double left_starvation_threshold_seconds = 2.0;
-        double movement_starvation_max_wait_seconds = 20.0;
-        double route_priority_wait_weight = 1.0;
+        double movement_starvation_max_wait_seconds = 10.0;
+        double route_priority_wait_weight = 2.0;
         double route_priority_queue_weight = 3.0;
-        double route_priority_aging_weight = 0.5;
-        double route_max_green_seconds = 8.0;
+        double route_priority_aging_weight = 1.5;
+        double route_max_green_seconds = 6.0;
         int route_target_vehicles_per_green = 4;
     };
 

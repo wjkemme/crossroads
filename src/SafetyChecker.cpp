@@ -186,6 +186,14 @@ namespace crossroads {
             return true;
         }
 
+        // A left turn conflicts with traffic from the approach it crosses
+        if (move_a == MovementType::Left && from_b == destinationFor(from_a, move_a)) {
+            return true;
+        }
+        if (move_b == MovementType::Left && from_a == destinationFor(from_b, move_b)) {
+            return true;
+        }
+
         bool a_ns = isInNorthSouthCorridor(from_a, move_a);
         bool b_ns = isInNorthSouthCorridor(from_b, move_b);
 
