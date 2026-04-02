@@ -16,10 +16,20 @@
             "problemMatcher": []
         },
         {
+            "label": "Kill crossroads",
+            "type": "shell",
+            "command": "pkill -f './build/crossroads' 2>/dev/null; fuser -k 8080/tcp 2>/dev/null; sleep 0.3; echo 'Old processes cleaned up'",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent"
+            }
+        },
+        {
             "label": "CMake: run",
             "type": "shell",
             "command": "./build/crossroads",
             "group": "none",
+            "dependsOn": "Kill crossroads",
             "problemMatcher": []
         }
     ]
